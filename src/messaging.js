@@ -1,0 +1,61 @@
+// Shared messaging surface for popup / side panel / content script ↔ service
+// worker. Every message carries a requestId so callers can correlate an async
+// response back to their request without extra bookkeeping.
+//
+// Envelope:
+//   { type: string, payload?: any, requestId: string }
+// Reply envelope:
+//   { ok: true, data?: any, requestId }   |   { ok: false, error: string, requestId }
+
+export const MESSAGE_TYPES = Object.freeze({
+  PING: "PING",
+  GET_SETTINGS: "GET_SETTINGS",
+  SET_SETTING: "SET_SETTING",
+});
+
+// Persisted user preferences. Keep this list authoritative — new UI state
+// that needs to survive a restart should be added here, not scattered.
+export const SETTING_KEYS = Object.freeze([
+  "mode",          // 'chat' | 'agent'
+  "onDeviceOnly",  // boolean — Cloud vs On-Device toggle
+]);
+
+export const SETTING_DEFAULTS = Object.freeze({
+  mode: "chat",
+  onDeviceOnly: true,
+});
+
+function newRequestId() {
+  // crypto.randomUUID is available in service workers, extension pages,
+  // and content scripts in modern Chrome.
+  return crypto.randomUUID();
+}
+
+function unwrap(resp) {
+  if (chrome.runtime.lastError) {
+    throw new Error(chrome.runtime.lastError.message);
+  }
+  if (!resp) throw new Error("no response from receiver");
+  if (!resp.ok) throw new Error(resp.error || "unknown error");
+  return resp.data;
+}
+
+// Caller ↔ background service worker.
+export function sendToBackground(type, payload) {
+  const requestId = newRequestId();
+  return new Promise((resolve, reject) => {
+    chrome.runtime.sendMessage({ type, payload, requestId }, (resp) => {
+      try { resolve(unwrap(resp)); } catch (err) { reject(err); }
+    });
+  });
+}
+
+// Background ↔ a specific tab's content script.
+export function sendToTab(tabId, type, payload) {
+  const requestId = newRequestId();
+  return new Promise((resolve, reject) => {
+    chrome.tabs.sendMessage(tabId, { type, payload, requestId }, (resp) => {
+      try { resolve(unwrap(resp)); } catch (err) { reject(err); }
+    });
+  });
+}

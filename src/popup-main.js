@@ -22,6 +22,7 @@ import {
   TextStreamer,
   InterruptableStoppingCriteria,
 } from "../dist/vendor/transformers/transformers.min.js";
+import { MESSAGE_TYPES, sendToBackground } from "./messaging.js";
 
 const MODEL_ID = "HuggingFaceTB/SmolVLM-256M-Instruct";
 const SAMPLE_PATH = "assets/sample-screen.png";
@@ -337,6 +338,29 @@ async function onRunSample() {
   }
 }
 
+async function onPingBg() {
+  const t0 = performance.now();
+  try {
+    const data = await sendToBackground(MESSAGE_TYPES.PING, { from: "popup", t0 });
+    const dt = performance.now() - t0;
+    log(`[bg] PING → ${JSON.stringify(data)} (rtt=${dt.toFixed(1)}ms)`);
+    setStatus(`BG responded in ${dt.toFixed(1)}ms`);
+  } catch (err) {
+    log(`[bg] PING FAILED — ${err.message}`);
+    setStatus("BG ping failed");
+  }
+}
+
+async function onReadSettings() {
+  try {
+    const data = await sendToBackground(MESSAGE_TYPES.GET_SETTINGS);
+    log(`[bg] settings → ${JSON.stringify(data)}`);
+    setStatus("settings loaded");
+  } catch (err) {
+    log(`[bg] settings FAILED — ${err.message}`);
+  }
+}
+
 document.addEventListener("DOMContentLoaded", () => {
   const ver = (env && env.version) || "unknown";
   log(`[boot] Transformers.js loaded (env.version=${ver})`);
@@ -344,4 +368,6 @@ document.addEventListener("DOMContentLoaded", () => {
   setStatus("Ready. Click Test AI to load the model.");
   $("testAiBtn").addEventListener("click", onTestAi);
   $("runSampleBtn").addEventListener("click", onRunSample);
+  $("pingBgBtn").addEventListener("click", onPingBg);
+  $("readSettingsBtn").addEventListener("click", onReadSettings);
 });
