@@ -375,6 +375,31 @@ async function onPingContent() {
   }
 }
 
+async function onCapture() {
+  const t0 = performance.now();
+  setStatus("capturing…");
+  try {
+    const data = await sendToBackground(MESSAGE_TYPES.CAPTURE_TAB);
+    const dt = performance.now() - t0;
+    const kb = (data.screenshotBytes / 1024).toFixed(1);
+    log(`[capture] ${data.page.url}`);
+    log(`[capture] viewport=${data.viewport.width}x${data.viewport.height}@${data.viewport.dpr}dpr scroll=${data.viewport.scrollX},${data.viewport.scrollY}`);
+    log(`[capture] elements=${data.elementCount}/${data.totalScanned} scanned; screenshot=${kb}KB; captureMs=${data.captureMs}; totalMs=${dt.toFixed(0)}`);
+    // Preview: first 3 interesting elements
+    for (const el of (data.elements || []).slice(0, 3)) {
+      const bb = el.bbox;
+      log(`[capture.el] ${el.fid} <${el.tag}${el.type ? ":" + el.type : ""}> role=${el.role} name="${(el.name || "").slice(0, 60)}" @${bb.x},${bb.y} ${bb.w}x${bb.h}`);
+    }
+    const img = $("captureImg");
+    img.src = data.screenshot;
+    img.style.display = "block";
+    setStatus(`captured in ${dt.toFixed(0)}ms`);
+  } catch (err) {
+    log(`[capture] FAILED — ${err.message}`);
+    setStatus("capture failed");
+  }
+}
+
 document.addEventListener("DOMContentLoaded", () => {
   const ver = (env && env.version) || "unknown";
   log(`[boot] Transformers.js loaded (env.version=${ver})`);
@@ -385,4 +410,5 @@ document.addEventListener("DOMContentLoaded", () => {
   $("pingBgBtn").addEventListener("click", onPingBg);
   $("readSettingsBtn").addEventListener("click", onReadSettings);
   $("pingContentBtn").addEventListener("click", onPingContent);
+  $("captureBtn").addEventListener("click", onCapture);
 });

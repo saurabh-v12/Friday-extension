@@ -15,6 +15,10 @@ export const MESSAGE_TYPES = Object.freeze({
   // ping it and return its response. Also the type the content script
   // itself responds to.
   CONTENT_PING: "CONTENT_PING",
+  // BG-side: chrome.tabs.captureVisibleTab + content-side DOM/a11y snapshot,
+  // combined into one structured payload. Content-side type is SNAPSHOT.
+  CAPTURE_TAB: "CAPTURE_TAB",
+  SNAPSHOT: "SNAPSHOT",
 });
 
 // Persisted user preferences. Keep this list authoritative — new UI state

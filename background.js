@@ -63,6 +63,25 @@ const handlers = {
     const data = await sendToTab(tab.id, MESSAGE_TYPES.CONTENT_PING, payload);
     return { tabId: tab.id, tabUrl: tab.url, ...data };
   },
+
+  async [MESSAGE_TYPES.CAPTURE_TAB](payload) {
+    const tab = await ensureContentInActiveTab();
+    // Run capture + snapshot in parallel — one is a Chrome API call from the
+    // service worker, the other is a message to the content script.
+    const tCap0 = Date.now();
+    const [screenshotDataUrl, snap] = await Promise.all([
+      chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" }),
+      sendToTab(tab.id, MESSAGE_TYPES.SNAPSHOT, payload),
+    ]);
+    const captureMs = Date.now() - tCap0;
+    return {
+      tabId: tab.id,
+      screenshot: screenshotDataUrl,
+      screenshotBytes: (screenshotDataUrl || "").length,
+      captureMs,
+      ...snap,
+    };
+  },
 };
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
