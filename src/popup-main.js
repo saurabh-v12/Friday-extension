@@ -4,9 +4,11 @@
 // Task 0.4: WebGPU detect on Test AI click.
 // Task 0.5: download + load small VLM on WebGPU with WASM fallback,
 //           aggregated progress bar, backend + load time report.
-// Task 0.6: run the loaded model on assets/sample-screen.svg with prompt
+// Task 0.6: run the loaded model on assets/sample-screen.png (PNG — SVG blobs
+//           fail to decode in the extension popup) with prompt
 //           "Describe this screen and list buttons and input fields",
-//           report inference time + generated text.
+//           report inference time + generated text. Load path tracks
+//           downloaded bytes so cached vs first-run is unambiguous.
 
 import {
   env,
@@ -16,8 +18,7 @@ import {
 } from "../dist/vendor/transformers/transformers.min.js";
 
 const MODEL_ID = "HuggingFaceTB/SmolVLM-256M-Instruct";
-const SAMPLE_PATH = "assets/sample-screen.svg";
-const SAMPLE_SIZE = 512; // rasterize to this square before feeding the model
+const SAMPLE_PATH = "assets/sample-screen.png";
 const PROMPT_TEXT = "Describe this screen and list buttons and input fields";
 const MAX_NEW_TOKENS = 192;
 
@@ -73,13 +74,18 @@ export const state = {
   model: null,
   backend: null,      // 'webgpu' | 'wasm'
   loadMs: null,
+  downloadedBytes: 0, // per-load; 0 → fully served from browser Cache Storage
   lastInferMs: null,
   modelId: MODEL_ID,
 };
 
 function makeProgressCallback() {
+  // Tracks files that emit `progress` events. Files served entirely from
+  // Cache Storage skip `progress` events, so a zero counter after a
+  // successful load means "fully cached".
   const files = new Map();
-  return function onProgress(info) {
+  let bytes = 0;
+  const cb = function onProgress(info) {
     if (!info) return;
     if (info.status === "progress" && info.file && info.total) {
       files.set(info.file, { loaded: info.loaded || 0, total: info.total });
@@ -89,6 +95,7 @@ function makeProgressCallback() {
     }
     let loaded = 0, total = 0;
     for (const v of files.values()) { loaded += v.loaded; total += v.total; }
+    bytes = loaded;
     if (total > 0) {
       const pct = (loaded / total) * 100;
       setProgress(pct);
@@ -98,6 +105,8 @@ function makeProgressCallback() {
       setStatus(`${info.status}: ${info.file}`);
     }
   };
+  cb.getBytes = () => bytes;
+  return cb;
 }
 
 async function tryLoad({ device, dtype, progress_callback }) {
@@ -124,6 +133,7 @@ export async function loadModel({ preferWebGPU }) {
       state.model = model;
       state.backend = "webgpu";
       state.loadMs = loadMs;
+      state.downloadedBytes = cb.getBytes();
       return state;
     } catch (err) {
       log(`[load] WebGPU load failed: ${err && err.message ? err.message : err}`);
@@ -138,31 +148,16 @@ export async function loadModel({ preferWebGPU }) {
   state.model = model;
   state.backend = "wasm";
   state.loadMs = loadMs;
+  state.downloadedBytes = cb.getBytes();
   return state;
 }
 
-// Loads assets/sample-screen.svg, rasterizes to SAMPLE_SIZE×SAMPLE_SIZE RGB,
-// and wraps in a Transformers.js RawImage.
+// Loads the bundled PNG using Transformers.js RawImage.read(url), which
+// fetches, decodes, and normalizes to the RGB tensor the processor expects.
+// PNG (not SVG) because the popup's decoder rejects SVG blobs.
 async function loadSampleImage() {
   const url = new URL("../" + SAMPLE_PATH, import.meta.url).href;
-  const resp = await fetch(url);
-  if (!resp.ok) throw new Error(`fetch ${SAMPLE_PATH} → ${resp.status}`);
-  const blob = await resp.blob();
-  const bitmap = await createImageBitmap(blob, {
-    resizeWidth: SAMPLE_SIZE,
-    resizeHeight: SAMPLE_SIZE,
-    resizeQuality: "high",
-  });
-  const canvas = new OffscreenCanvas(SAMPLE_SIZE, SAMPLE_SIZE);
-  const ctx = canvas.getContext("2d", { willReadFrequently: true });
-  ctx.drawImage(bitmap, 0, 0);
-  const { data, width, height } = ctx.getImageData(0, 0, SAMPLE_SIZE, SAMPLE_SIZE);
-  // Drop alpha → RGB, since VLMs expect 3 channels.
-  const rgb = new Uint8ClampedArray(width * height * 3);
-  for (let i = 0, j = 0; i < data.length; i += 4, j += 3) {
-    rgb[j] = data[i]; rgb[j + 1] = data[i + 1]; rgb[j + 2] = data[i + 2];
-  }
-  return new RawImage(rgb, width, height, 3);
+  return await RawImage.read(url);
 }
 
 export async function runInference() {
@@ -214,9 +209,11 @@ async function onTestAi() {
 
   try {
     setStatus("loading model (first run downloads ~150–300 MB; cached after)…");
-    const { backend, loadMs } = await loadModel({ preferWebGPU: gpu.available });
-    log(`[load] OK backend=${backend} loadMs=${loadMs.toFixed(0)} model=${MODEL_ID}`);
-    setStatus(`Model loaded on ${backend} in ${(loadMs / 1000).toFixed(1)}s.`);
+    const { backend, loadMs, downloadedBytes } = await loadModel({ preferWebGPU: gpu.available });
+    const mb = (downloadedBytes / 1024 / 1024).toFixed(1);
+    const cacheState = downloadedBytes === 0 ? "cached" : "downloaded";
+    log(`[load] OK backend=${backend} loadMs=${loadMs.toFixed(0)} ${cacheState}=${mb}MB model=${MODEL_ID}`);
+    setStatus(`Model loaded on ${backend} in ${(loadMs / 1000).toFixed(1)}s (${cacheState}: ${mb} MB).`);
     setProgress(100);
     $("runSampleBtn").disabled = false;
   } catch (err) {
@@ -235,7 +232,7 @@ async function onRunSample() {
   $("runSampleBtn").disabled = true;
   setProgress(0);
   setStatus("running inference on sample screen…");
-  log(`[infer] prompt="${PROMPT_TEXT}" image=${SAMPLE_PATH} (${SAMPLE_SIZE}×${SAMPLE_SIZE})`);
+  log(`[infer] prompt="${PROMPT_TEXT}" image=${SAMPLE_PATH}`);
 
   try {
     const { output, inferMs } = await runInference();
