@@ -11,6 +11,10 @@ export const MESSAGE_TYPES = Object.freeze({
   PING: "PING",
   GET_SETTINGS: "GET_SETTINGS",
   SET_SETTING: "SET_SETTING",
+  // BG-side: inject the content script into the active tab if needed, then
+  // ping it and return its response. Also the type the content script
+  // itself responds to.
+  CONTENT_PING: "CONTENT_PING",
 });
 
 // Persisted user preferences. Keep this list authoritative — new UI state

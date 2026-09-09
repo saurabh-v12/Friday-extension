@@ -361,6 +361,20 @@ async function onReadSettings() {
   }
 }
 
+async function onPingContent() {
+  const t0 = performance.now();
+  try {
+    const data = await sendToBackground(MESSAGE_TYPES.CONTENT_PING, { from: "popup", t0 });
+    const dt = performance.now() - t0;
+    log(`[content] ${data.tabUrl}`);
+    log(`[content] title="${data.title}" nodes=${data.nodeCount} forms=${data.formCount} inputs=${data.inputCount} readyState=${data.readyState}`);
+    setStatus(`content responded in ${dt.toFixed(1)}ms`);
+  } catch (err) {
+    log(`[content] PING FAILED — ${err.message}`);
+    setStatus("content ping failed");
+  }
+}
+
 document.addEventListener("DOMContentLoaded", () => {
   const ver = (env && env.version) || "unknown";
   log(`[boot] Transformers.js loaded (env.version=${ver})`);
@@ -370,4 +384,5 @@ document.addEventListener("DOMContentLoaded", () => {
   $("runSampleBtn").addEventListener("click", onRunSample);
   $("pingBgBtn").addEventListener("click", onPingBg);
   $("readSettingsBtn").addEventListener("click", onReadSettings);
+  $("pingContentBtn").addEventListener("click", onPingContent);
 });

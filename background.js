@@ -7,7 +7,29 @@ import {
   MESSAGE_TYPES,
   SETTING_KEYS,
   SETTING_DEFAULTS,
+  sendToTab,
 } from "./src/messaging.js";
+
+// Pages the extension can't inject into (chrome://, chrome-extension://,
+// edge://, view-source:, PDF viewer, etc.). Keep the check permissive: http
+// and https only for now.
+function isInjectableUrl(url) {
+  return typeof url === "string" && /^https?:/i.test(url);
+}
+
+async function ensureContentInActiveTab() {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab || !tab.id) throw new Error("no active tab");
+  if (!isInjectableUrl(tab.url)) {
+    throw new Error(`can't inject on ${tab.url || "(unknown)"} — http(s) only`);
+  }
+  // Idempotent — content.js short-circuits on __fridayContentLoaded.
+  await chrome.scripting.executeScript({
+    target: { tabId: tab.id },
+    files: ["content.js"],
+  });
+  return tab;
+}
 
 const handlers = {
   async [MESSAGE_TYPES.PING](payload) {
@@ -34,6 +56,12 @@ const handlers = {
     }
     await chrome.storage.local.set({ [payload.key]: payload.value });
     return { key: payload.key, value: payload.value };
+  },
+
+  async [MESSAGE_TYPES.CONTENT_PING](payload) {
+    const tab = await ensureContentInActiveTab();
+    const data = await sendToTab(tab.id, MESSAGE_TYPES.CONTENT_PING, payload);
+    return { tabId: tab.id, tabUrl: tab.url, ...data };
   },
 };
 
