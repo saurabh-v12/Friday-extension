@@ -2,18 +2,24 @@
 //
 // Task 0.3: import Transformers.js from local vendor copy (no CDN at runtime).
 // Task 0.4: WebGPU detect on Test AI click.
-// Task 0.5: download + load small VLM on WebGPU with WASM fallback;
-//           report backend and load time. First run downloads ~150–300 MB;
-//           the browser Cache Storage keeps it after that.
-// Task 0.6 (next): run the loaded model on a bundled sample screenshot.
+// Task 0.5: download + load small VLM on WebGPU with WASM fallback,
+//           aggregated progress bar, backend + load time report.
+// Task 0.6: run the loaded model on assets/sample-screen.svg with prompt
+//           "Describe this screen and list buttons and input fields",
+//           report inference time + generated text.
 
 import {
   env,
   AutoProcessor,
   AutoModelForImageTextToText,
+  RawImage,
 } from "../dist/vendor/transformers/transformers.min.js";
 
 const MODEL_ID = "HuggingFaceTB/SmolVLM-256M-Instruct";
+const SAMPLE_PATH = "assets/sample-screen.svg";
+const SAMPLE_SIZE = 512; // rasterize to this square before feeding the model
+const PROMPT_TEXT = "Describe this screen and list buttons and input fields";
+const MAX_NEW_TOKENS = 192;
 
 const VENDOR_URL = new URL("../dist/vendor/transformers/", import.meta.url).href;
 env.backends.onnx.wasm.wasmPaths = VENDOR_URL;
@@ -62,22 +68,18 @@ async function detectWebGPU() {
   }
 }
 
-// Module-scoped so 0.6 can reuse without reloading.
 export const state = {
   processor: null,
   model: null,
-  backend: null,     // 'webgpu' | 'wasm'
+  backend: null,      // 'webgpu' | 'wasm'
   loadMs: null,
+  lastInferMs: null,
   modelId: MODEL_ID,
 };
 
-// Track per-file downloads so the progress bar reflects overall load.
 function makeProgressCallback() {
-  const files = new Map(); // name -> { loaded, total }
+  const files = new Map();
   return function onProgress(info) {
-    // Transformers.js progress events look like:
-    //   { status: 'initiate' | 'download' | 'progress' | 'done' | 'ready',
-    //     name, file, loaded, total, progress }
     if (!info) return;
     if (info.status === "progress" && info.file && info.total) {
       files.set(info.file, { loaded: info.loaded || 0, total: info.total });
@@ -112,7 +114,6 @@ async function tryLoad({ device, dtype, progress_callback }) {
 
 export async function loadModel({ preferWebGPU }) {
   const cb = makeProgressCallback();
-  // WebGPU first (fp16 is smaller + faster on GPU), else WASM (q8 to stay lean on CPU).
   if (preferWebGPU) {
     try {
       log(`[load] trying WebGPU (q4f16) → ${MODEL_ID}`);
@@ -140,11 +141,68 @@ export async function loadModel({ preferWebGPU }) {
   return state;
 }
 
+// Loads assets/sample-screen.svg, rasterizes to SAMPLE_SIZE×SAMPLE_SIZE RGB,
+// and wraps in a Transformers.js RawImage.
+async function loadSampleImage() {
+  const url = new URL("../" + SAMPLE_PATH, import.meta.url).href;
+  const resp = await fetch(url);
+  if (!resp.ok) throw new Error(`fetch ${SAMPLE_PATH} → ${resp.status}`);
+  const blob = await resp.blob();
+  const bitmap = await createImageBitmap(blob, {
+    resizeWidth: SAMPLE_SIZE,
+    resizeHeight: SAMPLE_SIZE,
+    resizeQuality: "high",
+  });
+  const canvas = new OffscreenCanvas(SAMPLE_SIZE, SAMPLE_SIZE);
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  ctx.drawImage(bitmap, 0, 0);
+  const { data, width, height } = ctx.getImageData(0, 0, SAMPLE_SIZE, SAMPLE_SIZE);
+  // Drop alpha → RGB, since VLMs expect 3 channels.
+  const rgb = new Uint8ClampedArray(width * height * 3);
+  for (let i = 0, j = 0; i < data.length; i += 4, j += 3) {
+    rgb[j] = data[i]; rgb[j + 1] = data[i + 1]; rgb[j + 2] = data[i + 2];
+  }
+  return new RawImage(rgb, width, height, 3);
+}
+
+export async function runInference() {
+  if (!state.model || !state.processor) throw new Error("model not loaded");
+  const image = await loadSampleImage();
+
+  const messages = [{
+    role: "user",
+    content: [
+      { type: "image" },
+      { type: "text", text: PROMPT_TEXT },
+    ],
+  }];
+  const text = state.processor.apply_chat_template(messages, {
+    add_generation_prompt: true,
+  });
+  const inputs = await state.processor(text, [image]);
+
+  const t0 = performance.now();
+  const generated = await state.model.generate({
+    ...inputs,
+    max_new_tokens: MAX_NEW_TOKENS,
+    do_sample: false,
+  });
+  const inferMs = performance.now() - t0;
+  state.lastInferMs = inferMs;
+
+  // Trim the input prompt tokens off the front of each sequence before decoding.
+  const inputLen = inputs.input_ids.dims[1];
+  const trimmed = generated.slice(null, [inputLen, null]);
+  const decoded = state.processor.batch_decode(trimmed, { skip_special_tokens: true });
+  return { output: (decoded[0] || "").trim(), inferMs };
+}
+
 async function onTestAi() {
   $("testAiBtn").disabled = true;
+  $("runSampleBtn").disabled = true;
   setStatus("Checking WebGPU…");
   setProgress(0);
-  log("[click] " + new Date().toISOString());
+  log("[click] Test AI " + new Date().toISOString());
 
   const gpu = await detectWebGPU();
   if (gpu.available) {
@@ -158,8 +216,9 @@ async function onTestAi() {
     setStatus("loading model (first run downloads ~150–300 MB; cached after)…");
     const { backend, loadMs } = await loadModel({ preferWebGPU: gpu.available });
     log(`[load] OK backend=${backend} loadMs=${loadMs.toFixed(0)} model=${MODEL_ID}`);
-    setStatus(`Model loaded on ${backend} in ${(loadMs / 1000).toFixed(1)}s. Inference lands in 0.6.`);
+    setStatus(`Model loaded on ${backend} in ${(loadMs / 1000).toFixed(1)}s.`);
     setProgress(100);
+    $("runSampleBtn").disabled = false;
   } catch (err) {
     log(`[load] FAILED — ${err && err.message ? err.message : err}`);
     if (err && err.stack) log(err.stack.split("\n").slice(0, 4).join("\n"));
@@ -170,10 +229,36 @@ async function onTestAi() {
   }
 }
 
+async function onRunSample() {
+  if (!state.model) { log("[infer] load the model first (Test AI)"); return; }
+  $("testAiBtn").disabled = true;
+  $("runSampleBtn").disabled = true;
+  setProgress(0);
+  setStatus("running inference on sample screen…");
+  log(`[infer] prompt="${PROMPT_TEXT}" image=${SAMPLE_PATH} (${SAMPLE_SIZE}×${SAMPLE_SIZE})`);
+
+  try {
+    const { output, inferMs } = await runInference();
+    log(`[infer] backend=${state.backend} loadMs=${state.loadMs.toFixed(0)} inferMs=${inferMs.toFixed(0)} maxNewTokens=${MAX_NEW_TOKENS}`);
+    log(`[infer.out] ${output || "(empty)"}`);
+    setStatus(`Done in ${(inferMs / 1000).toFixed(1)}s on ${state.backend}.`);
+    setProgress(100);
+  } catch (err) {
+    log(`[infer] FAILED — ${err && err.message ? err.message : err}`);
+    if (err && err.stack) log(err.stack.split("\n").slice(0, 4).join("\n"));
+    setStatus("Inference failed. See output.");
+  } finally {
+    setTimeout(() => setProgress(null), 800);
+    $("testAiBtn").disabled = false;
+    $("runSampleBtn").disabled = false;
+  }
+}
+
 document.addEventListener("DOMContentLoaded", () => {
   const ver = (env && env.version) || "unknown";
   log(`[boot] Transformers.js loaded (env.version=${ver})`);
   log(`[boot] wasmPaths=${env.backends.onnx.wasm.wasmPaths}`);
-  setStatus("Ready. Click Test AI.");
+  setStatus("Ready. Click Test AI to load the model.");
   $("testAiBtn").addEventListener("click", onTestAi);
+  $("runSampleBtn").addEventListener("click", onRunSample);
 });
