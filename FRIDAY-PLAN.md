@@ -26,10 +26,19 @@ nothing sensitive ever leaving the machine.
 - **DOM for control, vision for understanding.** Clicks/typing target real DOM +
   accessibility-tree elements (near-100% accuracy). Vision is only for screen
   understanding + PII detection.
-- **Fully in-browser, zero user setup.** Models run via Transformers.js + WebGPU,
-  downloaded once and cached in the browser (Cache Storage/IndexedDB). No Ollama,
-  no server, no terminal for the end user.
-- **Brain Router** chooses reasoning source per task: Local model → BYOK key → MCP.
+- **On-device core = DOM + a11y + BlazeFace + Tesseract.js.** Millisecond-scale,
+  no local VLM on the critical path. (Gate 0.7 confirmed the in-browser VLM is
+  functionally correct but ~100× too slow on typical Intel-iGPU/CPU hardware
+  for live use.)
+- **Reasoning / screen-understanding = BYOK cloud** (Gemini Flash / OpenAI /
+  Groq) via the **Brain Router**. Redaction ALWAYS runs on-device BEFORE any
+  API call — the privacy boundary sits before the wire, not after.
+- **Local in-browser VLM = OPTIONAL, off-by-default fallback** for strong-GPU
+  users. Stays in the repo (popup Test AI + Run on sample) but is not on the
+  primary path. No further performance chasing.
+- **Fully in-browser, zero user setup** for the on-device core: DOM/a11y is
+  free, detectors download once and cache. BYOK requires the user's own key,
+  stored in `chrome.storage.local`.
 - **Privacy boundary is absolute:** redaction runs on-device BEFORE any network
   or tool call.
 - Chrome first. One flawless demo over many half-working features.
@@ -77,6 +86,7 @@ Tall vertical sidebar (extension side panel / popup).
 ("On-device / 0 data sent") is shown via the header Cloud/On-Device toggle.
 
 ## PROGRESS LOG (newest at top — Claude Code appends here each session)
+- 2026-09-10 — 0.7 **CLOSED — VLM proven, deferred as optional fallback**. Final data: WebGPU 104s first-token (interrupted); WASM 115s first-token, correct answer but loops ("sign in page has two input fields, email and password" repeated). Verdict: local in-browser VLM is functionally correct on this laptop (reads screens accurately) but ~100× too slow for live interaction. **Locked direction:** on-device core = DOM parsing + accessibility tree (control) + BlazeFace + Tesseract.js (PII detection/redaction), millisecond-scale, no local VLM on the critical path. Reasoning routes via BYOK (Gemini Flash / OpenAI / Groq) through the Brain Router; redaction always runs on-device before any API call. Local VLM stays in the repo as an optional off-by-default fallback for strong-GPU users — no further performance chasing on this hardware. LOCKED DESIGN DECISIONS updated accordingly. Beginning Phase 1: 1.1 background service worker + message routing → 1.2 side-panel UI to spec → 1.3 header controls.
 - 2026-09-10 — 0.7 WASM numbers + preprocess optimization: user run — WASM `[load] loadMs=55723 downloaded=255.1MB` (first-time q4 download), `[infer] inferMs=118739 firstTokenMs=117689 chunks=5 timedOut=false`, output `"Sign in to Acme."` — real answer, but 118s is unusable. Per-chunk after first token was ~200ms so decode itself is fine; the ~117s cost is entirely in the FIRST forward pass (vision encoder over 512×512 → ~1000+ image tokens, plus prefill). **Optimization committed** before the next test: (1) resize input to 384×384 via `RawImage.resize()` before the processor — ~2.8× fewer image tokens; (2) split-timing — now logs `preprocess=Xms promptTokens=N imageSize=384` separately from `inferMs`/`firstTokenMs` so the next report pinpoints where the seconds go. Awaiting one more WASM run to decide: <30s → ship WASM; still >60s → invoke the plan's fallback ("lean harder on detectors") and mark VLM as a background/fallback path, since DOM+accessibility is the primary control layer per the locked design decisions anyway.
 - 2026-09-10 — 0.7 WebGPU numbers (verdict: unusable on Intel gen-12lp): user run — env=Transformers.js 3.8.1; WebGPU `vendor=intel arch=gen-12lp`; `[load] backend=webgpu loadMs=810` (cached; downloaded=183.5MB line is a cache-hit false positive in the byte tally — Transformers.js emits `progress` even for Cache Storage responses; cosmetic, will fix during Phase 1); `[infer] inferMs=104191 firstTokenMs=104188 chunks=2 timedOut=true`; `[infer.out] "This"`. The 60s watchdog fired but `InterruptableStoppingCriteria` only checks between forward passes — the runtime was stuck inside a single WebGPU submit for the first decode step, which is textbook Intel-iGPU + fp16 SmolVLM behavior (shader-compile / fp16 emulation stall). Awaiting WASM comparison numbers before choosing: default-to-WASM (if <15s) OR swap model / lean on detectors (if also slow).
 - 2026-09-10 — 0.7 hang diagnosis + fixes: user report — cache works (`loadMs=1025`, `cached=0.0 MB`), PNG decodes cleanly, but inference hangs indefinitely with no `[infer.out]`. Suspected cause: first-inference WebGPU shader compile on Intel iGPU can take 30–60s and previously we had no visibility. Fixes: (1) `MAX_NEW_TOKENS 192 → 64`, greedy already; (2) hooked `TextStreamer(processor.tokenizer, { skip_prompt, skip_special_tokens, callback_function })` — logs `[infer] first-token in Xms` on first chunk, updates the status line every 4 chunks (`generating… N chunks, Xs`), so a silent stall is now visible; (3) real interrupt via `InterruptableStoppingCriteria` — 60s `setTimeout` calls `.interrupt()`, `generate()` returns cleanly, we log `[infer] TIMEOUT after 60s` and still print whatever the streamer accumulated; (4) added "Force WASM" checkbox next to Test AI so the same inference can be benchmarked on CPU vs GPU without touching code — unchecked→WebGPU, checked→WASM. Log line expanded: `backend inferMs firstTokenMs chunks timedOut`. Awaiting user re-run for the numbers.
@@ -106,9 +116,10 @@ Tall vertical sidebar (extension side panel / popup).
 - [x] 0.6 Run the model on a bundled sample screenshot with prompt "Describe this
       screen and list buttons and input fields"; print output + load time +
       inference time.
-- [ ] 0.7 GATE REVIEW: record the numbers in the progress log. If it runs at
+- [x] 0.7 GATE REVIEW: record the numbers in the progress log. If it runs at
       acceptable speed → proceed to Phase 1. If too slow → switch to a smaller
       model / lean harder on detectors before continuing.
+      **CLOSED — VLM proven, deferred as optional fallback.** See progress log.
 
 ### PHASE 1 — EXTENSION SHELL + UI
 - [ ] 1.1 Background service worker + message routing (popup/content <-> worker).
