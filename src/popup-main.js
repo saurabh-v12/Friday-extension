@@ -28,6 +28,9 @@ const SAMPLE_PATH = "assets/sample-screen.png";
 const PROMPT_TEXT = "Describe this screen and list buttons and input fields";
 const MAX_NEW_TOKENS = 64;
 const INFER_TIMEOUT_MS = 60_000;
+// Downscale before the VLM to cut vision-encoder + prefill cost. 512→384 is
+// ~2.8× fewer image tokens; on Intel iGPU/CPU that's a first-token win.
+const INFER_IMAGE_SIZE = 384;
 
 const VENDOR_URL = new URL("../dist/vendor/transformers/", import.meta.url).href;
 env.backends.onnx.wasm.wasmPaths = VENDOR_URL;
@@ -163,13 +166,21 @@ export async function loadModel({ preferWebGPU }) {
 // Loads the bundled PNG using Transformers.js RawImage.read(url), which
 // fetches, decodes, and normalizes to the RGB tensor the processor expects.
 // PNG (not SVG) because the popup's decoder rejects SVG blobs.
+// Downscaled to INFER_IMAGE_SIZE before hitting the processor so the vision
+// encoder does less work.
 async function loadSampleImage() {
   const url = new URL("../" + SAMPLE_PATH, import.meta.url).href;
-  return await RawImage.read(url);
+  const raw = await RawImage.read(url);
+  return await raw.resize(INFER_IMAGE_SIZE, INFER_IMAGE_SIZE);
 }
 
 export async function runInference() {
   if (!state.model || !state.processor) throw new Error("model not loaded");
+
+  // Split preprocess vs generate timing so the next report says exactly
+  // where the seconds went (image decode/resize + processor tokenize vs
+  // model forward passes).
+  const tPre0 = performance.now();
   const image = await loadSampleImage();
 
   const messages = [{
@@ -183,6 +194,9 @@ export async function runInference() {
     add_generation_prompt: true,
   });
   const inputs = await state.processor(text, [image]);
+  const preprocessMs = performance.now() - tPre0;
+  const promptTokens = inputs.input_ids.dims[1];
+  log(`[infer] preprocess=${preprocessMs.toFixed(0)}ms promptTokens=${promptTokens} imageSize=${INFER_IMAGE_SIZE}`);
 
   // Stream tokens so the status line moves during generation — proves the
   // model is alive vs stuck, and gives us first-token latency.
@@ -247,6 +261,8 @@ export async function runInference() {
       firstTokenMs,
       chunks: chunkCount,
       timedOut,
+      preprocessMs,
+      promptTokens,
     };
   } finally {
     clearTimeout(timer);
@@ -302,9 +318,9 @@ async function onRunSample() {
   log(`[infer] prompt="${PROMPT_TEXT}" image=${SAMPLE_PATH} maxNewTokens=${MAX_NEW_TOKENS} timeout=${INFER_TIMEOUT_MS / 1000}s`);
 
   try {
-    const { output, inferMs, firstTokenMs, chunks, timedOut } = await runInference();
+    const { output, inferMs, firstTokenMs, chunks, timedOut, preprocessMs, promptTokens } = await runInference();
     const ftt = firstTokenMs == null ? "n/a" : `${firstTokenMs.toFixed(0)}ms`;
-    log(`[infer] backend=${state.backend} inferMs=${inferMs.toFixed(0)} firstTokenMs=${ftt} chunks=${chunks} timedOut=${timedOut}`);
+    log(`[infer] backend=${state.backend} preprocessMs=${preprocessMs.toFixed(0)} inferMs=${inferMs.toFixed(0)} firstTokenMs=${ftt} chunks=${chunks} promptTokens=${promptTokens} timedOut=${timedOut}`);
     log(`[infer.out] ${output || "(empty)"}`);
     setStatus(timedOut
       ? `Timeout after ${(inferMs / 1000).toFixed(1)}s on ${state.backend}.`
