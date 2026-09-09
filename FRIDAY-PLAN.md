@@ -77,6 +77,7 @@ Tall vertical sidebar (extension side panel / popup).
 ("On-device / 0 data sent") is shown via the header Cloud/On-Device toggle.
 
 ## PROGRESS LOG (newest at top — Claude Code appends here each session)
+- 2026-09-09 — 0.4 done: Test AI button now runs `detectWebGPU()` in `src/popup-main.js` — checks `navigator.gpu`, calls `navigator.gpu.requestAdapter()`, prints `AVAILABLE` (with vendor/architecture/device from `adapter.info`) or `NOT available` (with reason: no `gpu`, null adapter, or thrown error). Sets a matching status line so the 0.5 fallback path is prewired. Next: 0.5 (download+load small VLM on WebGPU, WASM fallback).
 - 2026-09-09 — 0.3 done: added `@huggingface/transformers@^3.0.0` via `package.json` + `npm install`; wrote `scripts/build.mjs` which copies `node_modules/@huggingface/transformers/dist/*` → `dist/vendor/transformers/` (JS + ORT WASM), so no CDN at runtime; moved popup entry to `src/popup-main.js` as an ES module that imports from the local vendor path, sets `env.backends.onnx.wasm.wasmPaths` to that folder, disables `allowLocalModels`, enables `useBrowserCache`, and logs proof-of-load on popup open; `popup.html` now loads `src/popup-main.js` with `type="module"` (old flat `popup.js` deleted). Manifest CSP updated: `script-src 'self' 'wasm-unsafe-eval'` so ORT WASM can init. Dev workflow: `npm install && npm run build`; `dist/` gitignored per plan. Next: 0.4 (WebGPU detect on Test AI click).
 - 2026-09-09 — 0.2 done: added `manifest.json` (MV3, name "Friday", perms `activeTab`/`scripting`/`storage`, `host_permissions: <all_urls>`, popup action), `popup.html` (Test AI button, live status, progress bar, output area — minimal light theme; the pretty side-panel UI comes in 1.2), `popup.js` (button wiring, status/progress helpers, placeholder progress tick — WebGPU + model load land in 0.4–0.6). Next: 0.3 (bundle Transformers.js offline).
 - 2026-09-09 — 0.1 done: renamed plan file to `FRIDAY-PLAN.md`, `git init`, added remote `origin` → https://github.com/saurabh-v12/Friday-extension.git, wrote `.gitignore` (node_modules, dist, build, IDE junk, logs, .env), first commit + push `-u origin master`. Next: 0.2 (MV3 scaffold).
@@ -93,7 +94,7 @@ Tall vertical sidebar (extension side panel / popup).
       with a "Test AI" button + status + progress bar + output area, popup.js.
 - [x] 0.3 Add Transformers.js (@huggingface/transformers), bundled to work
       offline after first load.
-- [ ] 0.4 On "Test AI": check `navigator.gpu`; print WebGPU available/not.
+- [x] 0.4 On "Test AI": check `navigator.gpu`; print WebGPU available/not.
 - [ ] 0.5 Download + load a SMALL vision-language model (Moondream2 or SmolVLM)
       on WebGPU; WASM fallback; show download progress bar; report backend used.
 - [ ] 0.6 Run the model on a bundled sample screenshot with prompt "Describe this

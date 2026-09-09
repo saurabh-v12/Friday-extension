@@ -45,18 +45,46 @@ function log(line) {
   out.scrollTop = out.scrollHeight;
 }
 
+async function detectWebGPU() {
+  if (!("gpu" in navigator)) {
+    return { available: false, reason: "navigator.gpu is undefined" };
+  }
+  try {
+    const adapter = await navigator.gpu.requestAdapter();
+    if (!adapter) {
+      return { available: false, reason: "requestAdapter returned null" };
+    }
+    const info = adapter.info || {};
+    return {
+      available: true,
+      vendor: info.vendor || "(unknown)",
+      architecture: info.architecture || "(unknown)",
+      device: info.device || "(unknown)",
+      description: info.description || "",
+    };
+  } catch (err) {
+    return { available: false, reason: String(err) };
+  }
+}
+
 async function onTestAi() {
   $("testAiBtn").disabled = true;
-  setStatus("Test AI clicked — WebGPU check + model load land in 0.4–0.6.");
+  setStatus("Checking WebGPU…");
   setProgress(0);
   log("[click] " + new Date().toISOString());
-  // Placeholder progress tick so the bar is visibly wired.
-  for (let p = 0; p <= 100; p += 20) {
-    setProgress(p);
-    await new Promise((r) => setTimeout(r, 40));
+
+  const gpu = await detectWebGPU();
+  if (gpu.available) {
+    log(`[webgpu] AVAILABLE — vendor=${gpu.vendor} arch=${gpu.architecture} device=${gpu.device}`);
+    if (gpu.description) log(`[webgpu] description=${gpu.description}`);
+    setStatus("WebGPU available. Model load lands in 0.5.");
+  } else {
+    log(`[webgpu] NOT available — ${gpu.reason}`);
+    setStatus("WebGPU unavailable — will fall back to WASM in 0.5.");
   }
-  setStatus("scaffold OK.");
-  setProgress(null);
+
+  setProgress(100);
+  setTimeout(() => setProgress(null), 400);
   $("testAiBtn").disabled = false;
 }
 
