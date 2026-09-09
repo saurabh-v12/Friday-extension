@@ -1,0 +1,13 @@
+{
+  "name": "friday-extension",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Friday — private on-device AI agent for Chrome (MV3).",
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "^3.0.0"
+  }
+}
