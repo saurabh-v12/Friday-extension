@@ -4,17 +4,20 @@
   "version": "0.0.1",
   "description": "A private, on-device AI agent that reads and controls the web without sending your data anywhere.",
   "action": {
-    "default_title": "Friday",
-    "default_popup": "popup.html"
+    "default_title": "Friday"
   },
   "background": {
     "service_worker": "background.js",
     "type": "module"
   },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
   "permissions": [
     "activeTab",
     "scripting",
-    "storage"
+    "storage",
+    "sidePanel"
   ],
   "host_permissions": [
     "<all_urls>"

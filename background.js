@@ -56,7 +56,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   return true; // keep the port open for the async sendResponse
 });
 
-// First-install / update: seed defaults so GET_SETTINGS is stable from turn one.
+// First-install / update: seed defaults so GET_SETTINGS is stable from turn one,
+// and make clicking the toolbar icon open the side panel instead of a popup.
 chrome.runtime.onInstalled.addListener(async () => {
   const stored = await chrome.storage.local.get(SETTING_KEYS);
   const patch = {};
@@ -65,3 +66,8 @@ chrome.runtime.onInstalled.addListener(async () => {
   }
   if (Object.keys(patch).length) await chrome.storage.local.set(patch);
 });
+
+// Applied every boot (setPanelBehavior isn't persisted across service-worker restarts).
+chrome.sidePanel
+  .setPanelBehavior({ openPanelOnActionClick: true })
+  .catch((err) => console.warn("[friday.bg] setPanelBehavior failed:", err));
