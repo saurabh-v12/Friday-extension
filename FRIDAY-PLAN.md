@@ -77,6 +77,7 @@ Tall vertical sidebar (extension side panel / popup).
 ("On-device / 0 data sent") is shown via the header Cloud/On-Device toggle.
 
 ## PROGRESS LOG (newest at top — Claude Code appends here each session)
+- 2026-09-09 — 0.2 done: added `manifest.json` (MV3, name "Friday", perms `activeTab`/`scripting`/`storage`, `host_permissions: <all_urls>`, popup action), `popup.html` (Test AI button, live status, progress bar, output area — minimal light theme; the pretty side-panel UI comes in 1.2), `popup.js` (button wiring, status/progress helpers, placeholder progress tick — WebGPU + model load land in 0.4–0.6). Next: 0.3 (bundle Transformers.js offline).
 - 2026-09-09 — 0.1 done: renamed plan file to `FRIDAY-PLAN.md`, `git init`, added remote `origin` → https://github.com/saurabh-v12/Friday-extension.git, wrote `.gitignore` (node_modules, dist, build, IDE junk, logs, .env), first commit + push `-u origin master`. Next: 0.2 (MV3 scaffold).
 
 ---
@@ -86,7 +87,7 @@ Tall vertical sidebar (extension side panel / popup).
 ### PHASE 0 — DAY-1 PROOF (gate: must pass before Phase 1)
 - [x] 0.1 Init repo: `git init`, set remote to the URL above, `.gitignore`
       (node_modules, dist), first commit + push.
-- [ ] 0.2 Minimal MV3 extension: manifest.json (name "Friday"; permissions
+- [x] 0.2 Minimal MV3 extension: manifest.json (name "Friday"; permissions
       activeTab, scripting, storage; host_permissions <all_urls>), popup.html
       with a "Test AI" button + status + progress bar + output area, popup.js.
 - [ ] 0.3 Add Transformers.js (@huggingface/transformers), bundled to work
