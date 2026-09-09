@@ -6,21 +6,28 @@
 //           aggregated progress bar, backend + load time report.
 // Task 0.6: run the loaded model on assets/sample-screen.png (PNG — SVG blobs
 //           fail to decode in the extension popup) with prompt
-//           "Describe this screen and list buttons and input fields",
-//           report inference time + generated text. Load path tracks
-//           downloaded bytes so cached vs first-run is unambiguous.
+//           "Describe this screen and list buttons and input fields".
+//           Streamed via TextStreamer (first-token latency + chunk counter),
+//           capped at 64 new tokens, wrapped in a 60s watchdog that fires
+//           InterruptableStoppingCriteria.interrupt() to really stop the loop.
+//           Load path tracks downloaded bytes so cached vs first-run is
+//           unambiguous. "Force WASM" checkbox skips WebGPU for a CPU-vs-GPU
+//           benchmark on the same model.
 
 import {
   env,
   AutoProcessor,
   AutoModelForImageTextToText,
   RawImage,
+  TextStreamer,
+  InterruptableStoppingCriteria,
 } from "../dist/vendor/transformers/transformers.min.js";
 
 const MODEL_ID = "HuggingFaceTB/SmolVLM-256M-Instruct";
 const SAMPLE_PATH = "assets/sample-screen.png";
 const PROMPT_TEXT = "Describe this screen and list buttons and input fields";
-const MAX_NEW_TOKENS = 192;
+const MAX_NEW_TOKENS = 64;
+const INFER_TIMEOUT_MS = 60_000;
 
 const VENDOR_URL = new URL("../dist/vendor/transformers/", import.meta.url).href;
 env.backends.onnx.wasm.wasmPaths = VENDOR_URL;
@@ -77,6 +84,7 @@ export const state = {
   downloadedBytes: 0, // per-load; 0 → fully served from browser Cache Storage
   lastInferMs: null,
   modelId: MODEL_ID,
+  interruptor: null,  // set during generation so a watchdog can interrupt
 };
 
 function makeProgressCallback() {
@@ -176,20 +184,74 @@ export async function runInference() {
   });
   const inputs = await state.processor(text, [image]);
 
+  // Stream tokens so the status line moves during generation — proves the
+  // model is alive vs stuck, and gives us first-token latency.
+  let chunkCount = 0;
+  let accum = "";
+  let firstTokenMs = null;
   const t0 = performance.now();
-  const generated = await state.model.generate({
-    ...inputs,
-    max_new_tokens: MAX_NEW_TOKENS,
-    do_sample: false,
+  const streamer = new TextStreamer(state.processor.tokenizer, {
+    skip_prompt: true,
+    skip_special_tokens: true,
+    callback_function: (chunk) => {
+      chunkCount++;
+      accum += chunk;
+      if (firstTokenMs === null) {
+        firstTokenMs = performance.now() - t0;
+        log(`[infer] first-token in ${firstTokenMs.toFixed(0)}ms`);
+      }
+      if (chunkCount % 4 === 0) {
+        const elapsed = performance.now() - t0;
+        setStatus(`generating… ${chunkCount} chunks, ${(elapsed / 1000).toFixed(1)}s`);
+      }
+    },
   });
-  const inferMs = performance.now() - t0;
-  state.lastInferMs = inferMs;
 
-  // Trim the input prompt tokens off the front of each sequence before decoding.
-  const inputLen = inputs.input_ids.dims[1];
-  const trimmed = generated.slice(null, [inputLen, null]);
-  const decoded = state.processor.batch_decode(trimmed, { skip_special_tokens: true });
-  return { output: (decoded[0] || "").trim(), inferMs };
+  // Real interrupt (not a Promise.race — the generation loop actually stops)
+  // via InterruptableStoppingCriteria, tripped by a setTimeout watchdog.
+  const interruptor = new InterruptableStoppingCriteria();
+  state.interruptor = interruptor;
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    interruptor.interrupt();
+    log(`[infer] TIMEOUT after ${(INFER_TIMEOUT_MS / 1000).toFixed(0)}s — interrupting`);
+  }, INFER_TIMEOUT_MS);
+
+  try {
+    const generated = await state.model.generate({
+      ...inputs,
+      max_new_tokens: MAX_NEW_TOKENS,
+      do_sample: false,
+      streamer,
+      stopping_criteria: interruptor,
+    });
+    const inferMs = performance.now() - t0;
+    state.lastInferMs = inferMs;
+
+    // Prefer decoded output; on interrupt, fall back to whatever the streamer accumulated.
+    let outputText = "";
+    try {
+      const inputLen = inputs.input_ids.dims[1];
+      const trimmed = generated.slice(null, [inputLen, null]);
+      const decoded = state.processor.batch_decode(trimmed, { skip_special_tokens: true });
+      outputText = (decoded[0] || "").trim();
+    } catch {
+      outputText = accum.trim();
+    }
+    if (!outputText) outputText = accum.trim();
+
+    return {
+      output: outputText,
+      inferMs,
+      firstTokenMs,
+      chunks: chunkCount,
+      timedOut,
+    };
+  } finally {
+    clearTimeout(timer);
+    state.interruptor = null;
+  }
 }
 
 async function onTestAi() {
@@ -198,6 +260,9 @@ async function onTestAi() {
   setStatus("Checking WebGPU…");
   setProgress(0);
   log("[click] Test AI " + new Date().toISOString());
+
+  const forceWasm = !!$("forceWasm").checked;
+  if (forceWasm) log(`[opt] Force WASM checked — skipping WebGPU`);
 
   const gpu = await detectWebGPU();
   if (gpu.available) {
@@ -209,7 +274,9 @@ async function onTestAi() {
 
   try {
     setStatus("loading model (first run downloads ~150–300 MB; cached after)…");
-    const { backend, loadMs, downloadedBytes } = await loadModel({ preferWebGPU: gpu.available });
+    const { backend, loadMs, downloadedBytes } = await loadModel({
+      preferWebGPU: gpu.available && !forceWasm,
+    });
     const mb = (downloadedBytes / 1024 / 1024).toFixed(1);
     const cacheState = downloadedBytes === 0 ? "cached" : "downloaded";
     log(`[load] OK backend=${backend} loadMs=${loadMs.toFixed(0)} ${cacheState}=${mb}MB model=${MODEL_ID}`);
@@ -232,13 +299,16 @@ async function onRunSample() {
   $("runSampleBtn").disabled = true;
   setProgress(0);
   setStatus("running inference on sample screen…");
-  log(`[infer] prompt="${PROMPT_TEXT}" image=${SAMPLE_PATH}`);
+  log(`[infer] prompt="${PROMPT_TEXT}" image=${SAMPLE_PATH} maxNewTokens=${MAX_NEW_TOKENS} timeout=${INFER_TIMEOUT_MS / 1000}s`);
 
   try {
-    const { output, inferMs } = await runInference();
-    log(`[infer] backend=${state.backend} loadMs=${state.loadMs.toFixed(0)} inferMs=${inferMs.toFixed(0)} maxNewTokens=${MAX_NEW_TOKENS}`);
+    const { output, inferMs, firstTokenMs, chunks, timedOut } = await runInference();
+    const ftt = firstTokenMs == null ? "n/a" : `${firstTokenMs.toFixed(0)}ms`;
+    log(`[infer] backend=${state.backend} inferMs=${inferMs.toFixed(0)} firstTokenMs=${ftt} chunks=${chunks} timedOut=${timedOut}`);
     log(`[infer.out] ${output || "(empty)"}`);
-    setStatus(`Done in ${(inferMs / 1000).toFixed(1)}s on ${state.backend}.`);
+    setStatus(timedOut
+      ? `Timeout after ${(inferMs / 1000).toFixed(1)}s on ${state.backend}.`
+      : `Done in ${(inferMs / 1000).toFixed(1)}s on ${state.backend}.`);
     setProgress(100);
   } catch (err) {
     log(`[infer] FAILED — ${err && err.message ? err.message : err}`);
