@@ -9,6 +9,7 @@ import {
   SETTING_DEFAULTS,
   sendToTab,
 } from "./src/messaging.js";
+import { detectDomPii } from "./src/pii.js";
 
 // Pages the extension can't inject into (chrome://, chrome-extension://,
 // edge://, view-source:, PDF viewer, etc.). Keep the check permissive: http
@@ -74,12 +75,14 @@ const handlers = {
       sendToTab(tab.id, MESSAGE_TYPES.SNAPSHOT, payload),
     ]);
     const captureMs = Date.now() - tCap0;
+    const pii = detectDomPii(snap.elements);
     return {
       tabId: tab.id,
       screenshot: screenshotDataUrl,
       screenshotBytes: (screenshotDataUrl || "").length,
       captureMs,
       ...snap,
+      pii,
     };
   },
 };

@@ -177,6 +177,10 @@
     if (type) out.type = type;
     if (el.id) out.id = el.id;
     if (tag === "a" && el.hasAttribute("href")) out.href = el.getAttribute("href");
+    if (tag === "input" || tag === "textarea") {
+      const ac = el.getAttribute("autocomplete");
+      if (ac) out.autocomplete = ac.toLowerCase();
+    }
     const value = safeValueDescriptor(el);
     if (value !== undefined) out.value = value;
     if (el.hasAttribute("disabled")) out.disabled = true;

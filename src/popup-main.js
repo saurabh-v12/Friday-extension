@@ -161,6 +161,14 @@ async function onCapture() {
       const bb = el.bbox;
       log(`[capture.el] ${el.fid} <${el.tag}${el.type ? ":" + el.type : ""}> role=${el.role} name="${(el.name || "").slice(0, 60)}" @${bb.x},${bb.y} ${bb.w}x${bb.h}`);
     }
+    if (data.pii) {
+      const summary = Object.entries(data.pii.counts).map(([k, n]) => `${k}=${n}`).join(" ") || "(none)";
+      log(`[pii] total=${data.pii.total} ${summary}`);
+      for (const hit of (data.pii.hits || []).slice(0, 5)) {
+        const ks = hit.kinds.map((h) => `${h.kind}<${h.source}>`).join(",");
+        log(`[pii.hit] ${hit.fid} <${hit.tag}${hit.type ? ":" + hit.type : ""}> name="${(hit.name || "").slice(0, 40)}" → ${ks}`);
+      }
+    }
     const img = $("captureImg");
     img.src = data.screenshot;
     img.style.display = "block";
