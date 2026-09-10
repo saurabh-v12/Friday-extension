@@ -694,3 +694,102 @@ body {
 .byok-status.byok-status--set {
   color: #1a7f4c;
 }
+
+/* ─── Agent run view (Task 4.4) ───────────────────────────────────── */
+
+.run-view {
+  flex: 1;
+  padding: 14px 14px 24px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.run-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+.run-task-wrap { flex: 1; min-width: 0; }
+.run-eyebrow {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--accent);
+  font-weight: 600;
+}
+.run-task {
+  margin-top: 2px;
+  font-size: 14px;
+  color: var(--text);
+  word-wrap: break-word;
+}
+
+.run-trace { display: flex; flex-direction: column; gap: 10px; }
+.trace-step {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+}
+.trace-step-num {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.trace-step-body { flex: 1; min-width: 0; }
+.trace-step-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  margin-bottom: 2px;
+}
+.trace-step-meta {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.trace-step-reasoning {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+  font-style: italic;
+  border-left: 2px solid var(--border-strong);
+  padding-left: 8px;
+}
+.trace-step.trace-step--error {
+  border-color: #f5b5b5;
+  background: #fff5f5;
+}
+.trace-step.trace-step--observing {
+  color: var(--text-muted);
+  font-size: 12px;
+  padding: 6px 12px;
+  background: var(--bg-soft);
+  border-style: dashed;
+}
+
+.run-final {
+  padding: 14px;
+  border-radius: var(--radius-md);
+  background: var(--accent-soft);
+  color: var(--text);
+  font-size: 13px;
+  border: 1px solid var(--accent);
+}
+.run-final.run-final--error {
+  background: #fff5f5;
+  border-color: #f5b5b5;
+  color: #a01919;
+}

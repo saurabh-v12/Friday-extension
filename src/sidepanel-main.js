@@ -17,6 +17,8 @@ import {
 } from "./messaging.js";
 import { loadModel, detectWebGPU, state as modelState } from "./model.js";
 import { runPrivacyPipeline, KIND_LABEL } from "./pipeline.js";
+import { runAgent, DEFAULT_MAX_STEPS } from "./agent.js";
+import { SOURCES } from "./router.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -151,6 +153,152 @@ function wireSettings() {
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && !$("settingsView").hidden) closeSettings();
   });
+}
+
+// ─── Agent run (Task 4.4) ─────────────────────────────────────────────
+
+let agentInFlight = false;
+
+function openRunView(task) {
+  $("emptyState").hidden = true;
+  $("settingsView").hidden = true;
+  $("receiptView").hidden = true;
+  $("runView").hidden = false;
+  $("runTask").textContent = task;
+  $("runTrace").innerHTML = "";
+  const finalEl = $("runFinal");
+  finalEl.hidden = true;
+  finalEl.classList.remove("run-final--error");
+}
+
+function closeRunView() {
+  $("runView").hidden = true;
+  $("emptyState").hidden = false;
+}
+
+function appendTraceRow(html, cls = "") {
+  const div = document.createElement("div");
+  div.className = `trace-step ${cls}`.trim();
+  div.innerHTML = html;
+  $("runTrace").appendChild(div);
+  div.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  return div;
+}
+
+function renderStopFinal(evt) {
+  const finalEl = $("runFinal");
+  const isError = evt.reason && evt.reason.startsWith("exec failed");
+  finalEl.hidden = false;
+  finalEl.classList.toggle("run-final--error", isError);
+  const label = isError ? "Stopped" : "Done";
+  const body = evt.output || evt.reason || "";
+  finalEl.innerHTML = `<strong>${label}.</strong>${body ? " " + escapeHtml(body) : ""}`;
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => (
+    { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
+  ));
+}
+
+async function onSubmitComposer(e) {
+  e && e.preventDefault && e.preventDefault();
+  if (agentInFlight) return;
+  const input = $("composerInput");
+  const task = (input.value || "").trim();
+  if (!task) return;
+  input.value = "";
+
+  const source = settings.reasoningSource || "local";
+  const cloudUnusable = source === "byok" && !settings.byokApiKey;
+  if (cloudUnusable) {
+    openRunView(task);
+    appendTraceRow(
+      `<div class="trace-step-body"><div class="trace-step-title">Cloud selected but no API key.</div><div class="trace-step-meta">Open Settings → Cloud API key to paste one, or switch the header toggle back to On-Device.</div></div>`,
+      "trace-step--error",
+    );
+    return;
+  }
+
+  agentInFlight = true;
+  openRunView(task);
+  let currentObserveDiv = null;
+  try {
+    const result = await runAgent({
+      task,
+      source,
+      config: source === "byok" ? {
+        provider: settings.byokProvider,
+        apiKey: settings.byokApiKey,
+        model: settings.byokModel,
+      } : {},
+      maxSteps: DEFAULT_MAX_STEPS,
+      onStep: (evt) => {
+        if (evt.phase === "observe") {
+          currentObserveDiv = appendTraceRow(
+            `<div class="trace-step-body">Step ${evt.step} — capturing + detecting…</div>`,
+            "trace-step--observing",
+          );
+        } else if (evt.phase === "reason") {
+          if (currentObserveDiv) currentObserveDiv.remove();
+          currentObserveDiv = null;
+          const a = evt.action || {};
+          const title =
+            a.type === "click" ? `Click <code>${escapeHtml(a.fid || "?")}</code>` :
+            a.type === "type" ? `Type into <code>${escapeHtml(a.fid || "?")}</code>` :
+            a.type === "scroll" ? `Scroll to <code>${escapeHtml(a.fid || "?")}</code>` :
+            a.type === "say" ? "Reply" :
+            a.type === "stop" ? "Task complete" : (a.type || "?");
+          const meta = [
+            `${evt.latencyMs.toFixed(0)} ms`,
+            evt.source,
+            evt.model || "",
+          ].filter(Boolean).join(" · ");
+          const reasoning = a.reasoning ? `<div class="trace-step-reasoning">${escapeHtml(a.reasoning)}</div>` : "";
+          appendTraceRow(
+            `<div class="trace-step-num">${evt.step}</div>` +
+            `<div class="trace-step-body">` +
+              `<div class="trace-step-title">${title}</div>` +
+              `<div class="trace-step-meta">${meta}</div>` +
+              reasoning +
+            `</div>`,
+          );
+        } else if (evt.phase === "act" && evt.execError) {
+          appendTraceRow(
+            `<div class="trace-step-body"><div class="trace-step-title">Execution failed</div><div class="trace-step-meta">${escapeHtml(evt.execError)}</div></div>`,
+            "trace-step--error",
+          );
+        } else if (evt.phase === "stop") {
+          renderStopFinal(evt);
+        } else if (evt.phase === "error") {
+          const finalEl = $("runFinal");
+          finalEl.hidden = false;
+          finalEl.classList.add("run-final--error");
+          finalEl.textContent = evt.message;
+        }
+      },
+    });
+    if (result.final && result.final.type === "error" && !$("runFinal").textContent) {
+      const finalEl = $("runFinal");
+      finalEl.hidden = false;
+      finalEl.classList.add("run-final--error");
+      finalEl.textContent = result.final.message;
+    }
+  } catch (err) {
+    const finalEl = $("runFinal");
+    finalEl.hidden = false;
+    finalEl.classList.add("run-final--error");
+    finalEl.textContent = err && err.message ? err.message : String(err);
+  } finally {
+    agentInFlight = false;
+  }
+}
+
+function wireComposer() {
+  const composer = $("composer");
+  if (composer) composer.addEventListener("submit", onSubmitComposer);
+  const closeBtn = $("runCloseBtn");
+  if (closeBtn) closeBtn.addEventListener("click", closeRunView);
 }
 
 // ─── Privacy scan + receipt ──────────────────────────────────────────
@@ -384,4 +532,5 @@ document.addEventListener("DOMContentLoaded", async () => {
   wireVlm();
   wireByok();
   wireReceipt();
+  wireComposer();
 });
