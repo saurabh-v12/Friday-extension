@@ -655,3 +655,42 @@ body {
   gap: 8px;
   justify-content: flex-end;
 }
+
+/* ─── BYOK settings row ───────────────────────────────────────────── */
+
+.pill-select {
+  padding: 6px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--bg);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.pill-select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.text-input {
+  padding: 8px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13px;
+}
+.text-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.byok-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  justify-content: space-between;
+}
+.byok-status {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.byok-status.byok-status--set {
+  color: #1a7f4c;
+}

@@ -30,15 +30,23 @@ export const MESSAGE_TYPES = Object.freeze({
 // Persisted user preferences. Keep this list authoritative — new UI state
 // that needs to survive a restart should be added here, not scattered.
 export const SETTING_KEYS = Object.freeze([
-  "mode",          // 'chat' | 'agent'
-  "onDeviceOnly",  // boolean — Cloud vs On-Device toggle
-  "vlmEnabled",    // boolean — opt-in local VLM (deferred per gate 0.7)
+  "mode",             // 'chat' | 'agent'
+  "onDeviceOnly",     // boolean — Cloud vs On-Device toggle (derived from reasoningSource)
+  "vlmEnabled",       // boolean — opt-in local VLM (deferred per gate 0.7)
+  "reasoningSource",  // 'local' | 'byok' — SOURCES from src/router.js
+  "byokProvider",     // 'gemini' | 'openai' | 'groq'
+  "byokApiKey",       // string — stored in chrome.storage.local (device-scoped)
+  "byokModel",        // string — provider-specific model id
 ]);
 
 export const SETTING_DEFAULTS = Object.freeze({
   mode: "chat",
   onDeviceOnly: true,
   vlmEnabled: false,
+  reasoningSource: "local",
+  byokProvider: "gemini",
+  byokApiKey: "",
+  byokModel: "",
 });
 
 function newRequestId() {

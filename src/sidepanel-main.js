@@ -92,9 +92,17 @@ function wireModePill() {
 }
 
 // ─── Cloud / On-Device toggle ─────────────────────────────────────────
+//
+// This toggle is the user-facing surface for `reasoningSource`. On-device
+// = local (Transformers.js VLM if vlmEnabled, otherwise the router refuses
+// cloud). Cloud = byok (Gemini/OpenAI/Groq with the stored API key).
+// `onDeviceOnly` mirrors the state for anything that still reads the
+// legacy boolean.
 
 function renderDeviceToggle() {
-  const onDevice = settings.onDeviceOnly !== false;
+  const onDevice = settings.reasoningSource
+    ? settings.reasoningSource === "local"
+    : settings.onDeviceOnly !== false;
   $("deviceToggle").setAttribute("data-on-device", onDevice ? "true" : "false");
   $("deviceToggle").setAttribute(
     "aria-label",
@@ -106,8 +114,12 @@ function renderDeviceToggle() {
 
 function wireDeviceToggle() {
   $("deviceToggle").addEventListener("click", async () => {
-    const next = !(settings.onDeviceOnly !== false);
-    await saveSetting("onDeviceOnly", next);
+    const currentlyOnDevice = settings.reasoningSource
+      ? settings.reasoningSource === "local"
+      : settings.onDeviceOnly !== false;
+    const nextSource = currentlyOnDevice ? "byok" : "local";
+    await saveSetting("reasoningSource", nextSource);
+    await saveSetting("onDeviceOnly", nextSource === "local");
     renderDeviceToggle();
   });
 }
@@ -121,6 +133,7 @@ function openSettings() {
   renderMode();
   renderDeviceToggle();
   renderVlmToggle();
+  renderByok();
 }
 function closeSettings() {
   $("settingsView").hidden = true;
@@ -315,6 +328,50 @@ function wireVlm() {
   $("vlmDownloadBtn").addEventListener("click", onVlmDownload);
 }
 
+// ─── BYOK (Cloud API key) ─────────────────────────────────────────────
+
+const BYOK_DEFAULT_MODEL = { gemini: "gemini-2.0-flash", openai: "gpt-4o-mini", groq: "llama-3.2-11b-vision-preview" };
+
+function renderByok() {
+  const providerSel = $("byokProviderSel");
+  const keyInput = $("byokApiKeyInput");
+  const modelInput = $("byokModelInput");
+  const status = $("byokStatus");
+  if (!providerSel) return;
+  providerSel.value = settings.byokProvider || "gemini";
+  keyInput.value = settings.byokApiKey || "";
+  modelInput.value = settings.byokModel || "";
+  modelInput.placeholder = `Model (default: ${BYOK_DEFAULT_MODEL[providerSel.value]})`;
+  if (settings.byokApiKey) {
+    status.textContent = `Key set for ${providerSel.value}.`;
+    status.classList.add("byok-status--set");
+  } else {
+    status.textContent = "No key set.";
+    status.classList.remove("byok-status--set");
+  }
+}
+
+async function onByokSave() {
+  const provider = $("byokProviderSel").value;
+  const apiKey = $("byokApiKeyInput").value.trim();
+  const model = $("byokModelInput").value.trim();
+  await saveSetting("byokProvider", provider);
+  await saveSetting("byokApiKey", apiKey);
+  await saveSetting("byokModel", model);
+  renderByok();
+}
+
+function wireByok() {
+  const providerSel = $("byokProviderSel");
+  if (!providerSel) return;
+  providerSel.addEventListener("change", () => {
+    // Update placeholder when provider changes so the user sees the right default.
+    const modelInput = $("byokModelInput");
+    modelInput.placeholder = `Model (default: ${BYOK_DEFAULT_MODEL[providerSel.value]})`;
+  });
+  $("byokSaveBtn").addEventListener("click", onByokSave);
+}
+
 // ─── Boot ─────────────────────────────────────────────────────────────
 
 document.addEventListener("DOMContentLoaded", async () => {
@@ -325,5 +382,6 @@ document.addEventListener("DOMContentLoaded", async () => {
   wireDeviceToggle();
   wireSettings();
   wireVlm();
+  wireByok();
   wireReceipt();
 });
