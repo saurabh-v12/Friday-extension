@@ -19,6 +19,7 @@ import { loadModel, detectWebGPU, state as modelState } from "./model.js";
 import { runPrivacyPipeline, KIND_LABEL } from "./pipeline.js";
 import { runAgent, DEFAULT_MAX_STEPS } from "./agent.js";
 import { SOURCES } from "./router.js";
+import { isSttSupported, startDictation, speak, isTtsSupported, startWakeWord } from "./voice.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -270,6 +271,7 @@ async function onSubmitComposer(e) {
           );
         } else if (evt.phase === "stop") {
           renderStopFinal(evt);
+          maybeSpeakFinal(evt);
         } else if (evt.phase === "error") {
           const finalEl = $("runFinal");
           finalEl.hidden = false;
@@ -299,6 +301,117 @@ function wireComposer() {
   if (composer) composer.addEventListener("submit", onSubmitComposer);
   const closeBtn = $("runCloseBtn");
   if (closeBtn) closeBtn.addEventListener("click", closeRunView);
+}
+
+// ─── Voice: STT (5.1) + wake word (5.2) + TTS (5.3) ──────────────────
+
+let dictationSession = null;
+let wakeSession = null;
+
+function setMicState(state) {
+  const micBtn = $("micBtn");
+  if (!micBtn) return;
+  micBtn.dataset.state = state; // 'idle' | 'listening' | 'wake'
+  micBtn.setAttribute(
+    "aria-pressed",
+    state === "listening" || state === "wake" ? "true" : "false"
+  );
+  micBtn.setAttribute(
+    "aria-label",
+    state === "listening" ? "Listening — click to stop"
+      : state === "wake" ? "Wake word active — click for one-shot"
+      : "Voice input",
+  );
+}
+
+function onMicClick() {
+  if (dictationSession) {
+    dictationSession.stop();
+    dictationSession = null;
+    setMicState(wakeSession ? "wake" : "idle");
+    return;
+  }
+  if (!isSttSupported()) {
+    // No STT — give the composer focus as a fallback.
+    const inp = $("composerInput");
+    if (inp) inp.focus();
+    return;
+  }
+  const input = $("composerInput");
+  setMicState("listening");
+  dictationSession = startDictation({
+    onInterim: (text) => { if (input) input.value = text; },
+    onFinal: (text) => {
+      if (input) input.value = text;
+      dictationSession = null;
+      setMicState(wakeSession ? "wake" : "idle");
+      // Auto-submit like the send button — the user's finger is off the mic
+      // by the time this fires, so a quiet auto-submit is the whole point.
+      onSubmitComposer({ preventDefault() {} });
+    },
+    onError: (err) => {
+      console.warn("[friday.voice] STT error:", err);
+      dictationSession = null;
+      setMicState(wakeSession ? "wake" : "idle");
+    },
+    onEnd: () => {
+      dictationSession = null;
+      if (!wakeSession) setMicState("idle");
+    },
+  });
+}
+
+function onMicLongPress() {
+  if (wakeSession) {
+    wakeSession.stop();
+    wakeSession = null;
+    setMicState("idle");
+    return;
+  }
+  if (!isSttSupported()) return;
+  wakeSession = startWakeWord({
+    phrase: "hey friday",
+    onWake: () => {
+      // Give the user a subtle audio ack; TTS is quicker than a beep here.
+      speak("Yes?");
+    },
+    onTask: (task) => {
+      if (!task) return;
+      const input = $("composerInput");
+      if (input) input.value = task;
+      onSubmitComposer({ preventDefault() {} });
+    },
+    onError: (err) => console.warn("[friday.voice] wake-word error:", err),
+  });
+  setMicState("wake");
+}
+
+function wireVoice() {
+  const micBtn = $("micBtn");
+  if (!micBtn) return;
+  setMicState("idle");
+  // Left-click: one-shot dictation. Long-press / right-click: wake word.
+  let pressTimer = null;
+  let longPressed = false;
+  micBtn.addEventListener("mousedown", () => {
+    longPressed = false;
+    pressTimer = setTimeout(() => { longPressed = true; onMicLongPress(); }, 600);
+  });
+  micBtn.addEventListener("mouseup", () => {
+    if (pressTimer) clearTimeout(pressTimer);
+    if (longPressed) return;
+    onMicClick();
+  });
+  micBtn.addEventListener("mouseleave", () => { if (pressTimer) clearTimeout(pressTimer); });
+  micBtn.addEventListener("contextmenu", (e) => { e.preventDefault(); onMicLongPress(); });
+}
+
+// After each agent run's final message, speak it via OS TTS.
+function maybeSpeakFinal(evt) {
+  if (!isTtsSupported()) return;
+  if (!settings || settings.mode === "chat") return; // opinion: speak in agent mode only
+  const text = evt.output || evt.reason || "";
+  if (text) speak(text);
 }
 
 // ─── Privacy scan + receipt ──────────────────────────────────────────
@@ -533,4 +646,5 @@ document.addEventListener("DOMContentLoaded", async () => {
   wireByok();
   wireReceipt();
   wireComposer();
+  wireVoice();
 });

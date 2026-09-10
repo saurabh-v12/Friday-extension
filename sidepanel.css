@@ -793,3 +793,20 @@ body {
   border-color: #f5b5b5;
   color: #a01919;
 }
+
+/* ─── Mic state (Phase 5) ────────────────────────────────────────── */
+
+.composer-icon-btn[data-state="listening"] {
+  color: var(--accent);
+  background: var(--accent-soft);
+  animation: micPulse 900ms ease-in-out infinite;
+}
+.composer-icon-btn[data-state="wake"] {
+  color: var(--accent);
+  outline: 1px dashed var(--accent);
+  outline-offset: -1px;
+}
+@keyframes micPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
