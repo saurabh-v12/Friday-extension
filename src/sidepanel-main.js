@@ -20,6 +20,8 @@ import { runPrivacyPipeline, KIND_LABEL } from "./pipeline.js";
 import { runAgent, needsPage, DEFAULT_MAX_STEPS } from "./agent.js";
 import { SOURCES } from "./router.js";
 import { isSttSupported, startDictation, speak, isTtsSupported, startWakeWord } from "./voice.js";
+import { runChatTurn } from "./chatAgent.js";
+import { supportsToolCalling } from "./byok.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -165,13 +167,49 @@ function wireSettings() {
   });
 }
 
-// ─── Agent run (Task 4.4) ─────────────────────────────────────────────
+// ─── Agent run + chat (Task 4.4 + SEEING/CONTROLLING) ────────────────
 
 let agentInFlight = false;
 
-function openRunView(task) {
-  $("runTask").textContent = task;
+// In-memory chat history — mirrors settings.chatHistory (persisted).
+// Each entry is an OpenAI-shape message: {role, content, tool_calls?,
+// tool_call_id?}. Trimmed to MAX_HISTORY entries at save time so
+// chrome.storage.local doesn't slowly bloat.
+let chatHistory = [];
+const MAX_HISTORY = 40;
+
+function loadChatHistory() {
+  try {
+    const raw = settings.chatHistory || "[]";
+    const parsed = JSON.parse(raw);
+    chatHistory = Array.isArray(parsed) ? parsed : [];
+  } catch { chatHistory = []; }
+}
+
+async function persistChatHistory() {
+  const trimmed = chatHistory.slice(-MAX_HISTORY);
+  chatHistory = trimmed;
+  await saveSetting("chatHistory", JSON.stringify(trimmed));
+}
+
+async function newChat() {
+  chatHistory = [];
+  await persistChatHistory();
   $("runTrace").innerHTML = "";
+  $("runTask").textContent = "";
+  $("runStatus").textContent = "Chat";
+  const finalEl = $("runFinal");
+  if (finalEl) finalEl.hidden = true;
+  setView(VIEWS.HOME);
+}
+
+// Reserved: displayed only when there's no chat history (fresh boot).
+function openRunView(task) {
+  const trace = $("runTrace");
+  const hadHistory = chatHistory.length > 0 || trace.childElementCount > 0;
+  if (!hadHistory) trace.innerHTML = "";
+  $("runTask").textContent = task || "";
+  $("runStatus").textContent = task ? "Task" : "Chat";
   const finalEl = $("runFinal");
   finalEl.hidden = true;
   finalEl.classList.remove("run-final--error");
@@ -182,29 +220,98 @@ function closeRunView() {
   setView(VIEWS.HOME);
 }
 
-function appendTraceRow(html, cls = "") {
-  const div = document.createElement("div");
-  div.className = `trace-step ${cls}`.trim();
-  div.innerHTML = html;
-  $("runTrace").appendChild(div);
-  div.scrollIntoView({ behavior: "smooth", block: "nearest" });
-  return div;
+// Re-render the trace from chatHistory. Used on boot to restore state.
+function renderChatHistory() {
+  const trace = $("runTrace");
+  trace.innerHTML = "";
+  for (const msg of chatHistory) {
+    if (msg.role === "user") appendUserBubble(msg.content);
+    else if (msg.role === "assistant") {
+      if (msg.content) appendAssistantBubble(msg.content);
+      // Tool calls from history aren't re-rendered as chips — the
+      // final answer bubble is enough context. This keeps the scroll
+      // clean when a long conversation is restored on reboot.
+    }
+  }
+  if (chatHistory.length) {
+    $("runStatus").textContent = "Chat";
+  }
 }
 
-function renderStopFinal(evt) {
-  const finalEl = $("runFinal");
-  const isError = evt.reason && evt.reason.startsWith("exec failed");
-  finalEl.hidden = false;
-  finalEl.classList.toggle("run-final--error", isError);
-  const label = isError ? "Stopped" : "Done";
-  const body = evt.output || evt.reason || "";
-  finalEl.innerHTML = `<strong>${label}.</strong>${body ? " " + escapeHtml(body) : ""}`;
+function appendUserBubble(text) {
+  const trace = $("runTrace");
+  const wrap = document.createElement("div");
+  wrap.className = "chat-msg chat-msg--user";
+  const bubble = document.createElement("div");
+  bubble.className = "chat-bubble";
+  bubble.textContent = text;
+  wrap.appendChild(bubble);
+  trace.appendChild(wrap);
+  wrap.scrollIntoView({ behavior: "smooth", block: "end" });
+}
+
+function appendAssistantBubble(text) {
+  const trace = $("runTrace");
+  const wrap = document.createElement("div");
+  wrap.className = "chat-msg chat-msg--assistant";
+  const bubble = document.createElement("div");
+  bubble.className = "chat-bubble";
+  bubble.textContent = text || "(no reply)";
+  wrap.appendChild(bubble);
+  trace.appendChild(wrap);
+  wrap.scrollIntoView({ behavior: "smooth", block: "end" });
+}
+
+function appendStatusRow(text) {
+  const trace = $("runTrace");
+  const row = document.createElement("div");
+  row.className = "chat-status";
+  row.textContent = text;
+  trace.appendChild(row);
+  row.scrollIntoView({ behavior: "smooth", block: "end" });
+  return row;
+}
+
+function appendToolChip(name, args, result) {
+  const trace = $("runTrace");
+  const row = document.createElement("div");
+  const isErr = result && result.ok === false;
+  row.className = `chat-tool ${isErr ? "chat-tool--error" : ""}`;
+  const summary = summarizeToolCall(name, args, result);
+  row.innerHTML = `<span class="chat-tool-name">${escapeHtml(name)}</span> <span>${escapeHtml(summary)}</span>`;
+  trace.appendChild(row);
+  row.scrollIntoView({ behavior: "smooth", block: "end" });
+}
+
+function summarizeToolCall(name, args, result) {
+  const shorten = (s) => (String(s || "").length > 60 ? String(s).slice(0, 60) + "…" : String(s || ""));
+  if (result && result.ok === false) return `→ error: ${shorten(result.error)}`;
+  if (name === "click") return `→ ${shorten(result?.message || args.target || "")}`;
+  if (name === "type") return `${shorten(JSON.stringify(args.text || ""))} → ${shorten(args.target || "")}`;
+  if (name === "scroll") return `${args.direction}${args.amount ? ` ${args.amount}px` : ""}`;
+  if (name === "goto") return shorten(args.url || "");
+  if (name === "readText") return result?.text ? `${result.text.length} chars` : (args.target || "(page)");
+  if (name === "getSnapshot") return result?.snapshot ? `${result.snapshot.elementCount} elements` : "";
+  return "";
 }
 
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => (
     { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
   ));
+}
+
+// Which submit flow to use:
+//   • tool-calling chat (chatAgent.js) — the SEEING + CONTROLLING path.
+//     Requires source=byok and a provider that supports OpenAI-style
+//     tools (OpenAI, Groq). This is the default for cloud reasoning.
+//   • legacy runAgent (agent.js + router.js) — the older vision+ReAct
+//     path. Kept as fallback for Gemini or local reasoning; the composer
+//     bounces through it so users still get *something* even when
+//     tool-calling isn't wired up for their provider.
+function pickSubmitFlow(source, provider) {
+  if (source === "byok" && supportsToolCalling(provider)) return "chat-tools";
+  return "legacy-agent";
 }
 
 async function onSubmitComposer(e) {
@@ -217,112 +324,125 @@ async function onSubmitComposer(e) {
 
   const source = settings.reasoningSource || "local";
   const mode = settings.mode || "chat";
-  const willNeedPage = needsPage(task, mode);
+  const provider = settings.byokProvider || "gemini";
+  const flow = pickSubmitFlow(source, provider);
 
   const cloudUnusable = source === "byok" && !settings.byokApiKey;
   if (cloudUnusable) {
     openRunView(task);
-    appendTraceRow(
-      `<div class="trace-step-body"><div class="trace-step-title">Cloud selected but no API key.</div><div class="trace-step-meta">Open Settings → Cloud API key to paste one, or switch the header toggle back to On-Device.</div></div>`,
-      "trace-step--error",
-    );
-    return;
-  }
-  // Warn only for page tasks — chat-only won't try to load the VLM at all
-  // (router surfaces a friendly `say` telling the user to switch to Cloud).
-  if (willNeedPage && source === "local" && !settings.vlmEnabled) {
-    openRunView(task);
-    appendTraceRow(
-      `<div class="trace-step-body"><div class="trace-step-title">On-Device mode without VLM.</div><div class="trace-step-meta">Enable "Local VLM (optional)" in Settings, or switch the header toggle to Cloud (BYOK) — otherwise the router has no reasoning source.</div></div>`,
-      "trace-step--error",
-    );
+    appendUserBubble(task);
+    appendAssistantBubble("Cloud selected but no API key. Open Settings → Cloud API key to paste one, or switch the header toggle back to On-Device.");
     return;
   }
 
   agentInFlight = true;
   setComposerBusy(true);
   openRunView(task);
-  let currentObserveDiv = null;
+  appendUserBubble(task);
+
   try {
-    const result = await runAgent({
-      task,
-      mode,
-      source,
-      config: source === "byok" ? {
-        provider: settings.byokProvider,
-        apiKey: settings.byokApiKey,
-        model: settings.byokModel,
-      } : {},
-      mcpServers: parseMcpServers(),
-      maxSteps: DEFAULT_MAX_STEPS,
-      onStep: (evt) => {
-        if (evt.phase === "chat-only") {
-          appendTraceRow(
-            `<div class="trace-step-body">Answering (no page context)…</div>`,
-            "trace-step--observing",
-          );
-        } else if (evt.phase === "observe") {
-          currentObserveDiv = appendTraceRow(
-            `<div class="trace-step-body">Step ${evt.step} — capturing + detecting…</div>`,
-            "trace-step--observing",
-          );
-        } else if (evt.phase === "reason") {
-          if (currentObserveDiv) currentObserveDiv.remove();
-          currentObserveDiv = null;
-          const a = evt.action || {};
-          const title =
-            a.type === "click" ? `Click <code>${escapeHtml(a.fid || "?")}</code>` :
-            a.type === "type" ? `Type into <code>${escapeHtml(a.fid || "?")}</code>` :
-            a.type === "scroll" ? `Scroll to <code>${escapeHtml(a.fid || "?")}</code>` :
-            a.type === "mcp" ? `Call MCP <code>${escapeHtml(a.server || "?")}.${escapeHtml(a.tool || "?")}</code>` :
-            a.type === "say" ? "Reply" :
-            a.type === "stop" ? "Task complete" : (a.type || "?");
-          const meta = [
-            `${evt.latencyMs.toFixed(0)} ms`,
-            evt.source,
-            evt.model || "",
-          ].filter(Boolean).join(" · ");
-          const reasoning = a.reasoning ? `<div class="trace-step-reasoning">${escapeHtml(a.reasoning)}</div>` : "";
-          appendTraceRow(
-            `<div class="trace-step-num">${evt.step}</div>` +
-            `<div class="trace-step-body">` +
-              `<div class="trace-step-title">${title}</div>` +
-              `<div class="trace-step-meta">${meta}</div>` +
-              reasoning +
-            `</div>`,
-          );
-        } else if (evt.phase === "act" && evt.execError) {
-          appendTraceRow(
-            `<div class="trace-step-body"><div class="trace-step-title">Execution failed</div><div class="trace-step-meta">${escapeHtml(evt.execError)}</div></div>`,
-            "trace-step--error",
-          );
-        } else if (evt.phase === "stop") {
-          renderStopFinal(evt);
-          maybeSpeakFinal(evt);
-        } else if (evt.phase === "error") {
-          const finalEl = $("runFinal");
-          finalEl.hidden = false;
-          finalEl.classList.add("run-final--error");
-          finalEl.textContent = evt.message;
-        }
-      },
-    });
-    if (result.final && result.final.type === "error" && !$("runFinal").textContent) {
-      const finalEl = $("runFinal");
-      finalEl.hidden = false;
-      finalEl.classList.add("run-final--error");
-      finalEl.textContent = result.final.message;
+    if (flow === "chat-tools") {
+      await runChatToolsFlow({ task, mode, provider });
+    } else {
+      await runLegacyAgentFlow({ task, mode, source });
     }
   } catch (err) {
-    const finalEl = $("runFinal");
-    finalEl.hidden = false;
-    finalEl.classList.add("run-final--error");
     const raw = err && err.message ? err.message : String(err);
-    finalEl.textContent = friendlyError(raw);
+    appendAssistantBubble(`Error: ${friendlyError(raw)}`);
   } finally {
+    // Fixes stuck-spinner from earlier build — we ALWAYS unwind here,
+    // even if the flow threw or was cancelled.
     agentInFlight = false;
     setComposerBusy(false);
+    $("runStatus").textContent = "Chat";
   }
+}
+
+async function runChatToolsFlow({ task, mode, provider }) {
+  let statusRow = appendStatusRow("Thinking…");
+  const setStatus = (text) => { if (statusRow) statusRow.textContent = text; };
+
+  const { text, toolTrace, assistantMessage } = await runChatTurn({
+    userMessage: task,
+    history: chatHistory,
+    mode,
+    provider,
+    apiKey: settings.byokApiKey,
+    model: settings.byokModel,
+    onEvent: (evt) => {
+      if (evt.phase === "snapshot") {
+        if (evt.ok) setStatus(`Answering (with page context: ${evt.elementCount} elements)`);
+        else setStatus("Answering (no page context on this tab)");
+      } else if (evt.phase === "model-call") {
+        setStatus(`Calling model (step ${evt.step})…`);
+      } else if (evt.phase === "tool-call") {
+        setStatus(`Running tool: ${evt.name}`);
+      } else if (evt.phase === "tool-result") {
+        appendToolChip(evt.name, evt.args || {}, evt.result || {});
+      }
+    },
+  });
+
+  if (statusRow) statusRow.remove();
+  appendAssistantBubble(text);
+
+  // Persist the turn — user message + assistant message. Tool messages
+  // are omitted from the history we send back next turn because the
+  // OpenAI API requires them to be preceded by the exact assistant
+  // message that triggered them (with the same tool_call_ids). Since we
+  // rebuild the system prompt every turn with a fresh snapshot anyway,
+  // dropping stale tool results is fine — the model has the answer
+  // bubble as summary.
+  chatHistory.push({ role: "user", content: task });
+  chatHistory.push({
+    role: "assistant",
+    content: assistantMessage && assistantMessage.content ? assistantMessage.content : text,
+  });
+  await persistChatHistory();
+
+  if (mode === "agent") speakIfEnabled(text);
+}
+
+async function runLegacyAgentFlow({ task, mode, source }) {
+  const willNeedPage = needsPage(task, mode);
+  if (willNeedPage && source === "local" && !settings.vlmEnabled) {
+    appendAssistantBubble("On-Device mode without VLM. Enable 'Local VLM' in Settings, or switch the header toggle to Cloud (BYOK).");
+    return;
+  }
+  const statusRow = appendStatusRow("Thinking (legacy path)…");
+  const result = await runAgent({
+    task,
+    mode,
+    source,
+    config: source === "byok" ? {
+      provider: settings.byokProvider,
+      apiKey: settings.byokApiKey,
+      model: settings.byokModel,
+    } : {},
+    mcpServers: parseMcpServers(),
+    maxSteps: DEFAULT_MAX_STEPS,
+    onStep: (evt) => {
+      if (evt.phase === "reason") {
+        const a = evt.action || {};
+        if (a.type === "click" || a.type === "type" || a.type === "scroll") {
+          appendToolChip(a.type, { target: a.fid, text: a.text }, { ok: true, message: a.reasoning || "" });
+        }
+      }
+    },
+  });
+  if (statusRow) statusRow.remove();
+  const finalText = result.final && result.final.text
+    ? result.final.text
+    : (result.final && result.final.message) || "(no reply)";
+  appendAssistantBubble(finalText);
+  chatHistory.push({ role: "user", content: task });
+  chatHistory.push({ role: "assistant", content: finalText });
+  await persistChatHistory();
+  if (mode === "agent") speakIfEnabled(finalText);
+}
+
+function speakIfEnabled(text) {
+  if (isTtsSupported && isTtsSupported() && text) speak(text);
 }
 
 function setComposerBusy(busy) {
@@ -355,6 +475,8 @@ function wireComposer() {
   if (composer) composer.addEventListener("submit", onSubmitComposer);
   const closeBtn = $("runCloseBtn");
   if (closeBtn) closeBtn.addEventListener("click", closeRunView);
+  const newBtn = $("newChatBtn");
+  if (newBtn) newBtn.addEventListener("click", newChat);
 }
 
 // ─── Voice: STT (5.1) + wake word (5.2) + TTS (5.3) ──────────────────
@@ -460,13 +582,6 @@ function wireVoice() {
   micBtn.addEventListener("contextmenu", (e) => { e.preventDefault(); onMicLongPress(); });
 }
 
-// After each agent run's final message, speak it via OS TTS.
-function maybeSpeakFinal(evt) {
-  if (!isTtsSupported()) return;
-  if (!settings || settings.mode === "chat") return; // opinion: speak in agent mode only
-  const text = evt.output || evt.reason || "";
-  if (text) speak(text);
-}
 
 // ─── Privacy scan + receipt ──────────────────────────────────────────
 
@@ -871,6 +986,10 @@ function wireMcp() {
 document.addEventListener("DOMContentLoaded", async () => {
   setView(VIEWS.HOME);
   await loadSettings();
+  loadChatHistory();
+  renderChatHistory();
+  // If there's a saved conversation, restore into the chat view on boot.
+  if (chatHistory.length > 0) setView(VIEWS.RUN);
   renderMode();
   renderDeviceToggle();
   wireModePill();

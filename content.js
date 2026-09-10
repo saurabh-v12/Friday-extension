@@ -499,7 +499,73 @@
     [MSG.SNAPSHOT_COMPACT](payload) {
       return collectCompactSnapshot(payload || {});
     },
+    [MSG.EXEC_TOOL](payload) {
+      const { tool, args } = payload || {};
+      return execTool(tool, args || {});
+    },
   };
+
+  // ─── Tool executor for chat/agent tool-calling ──────────────────────
+  //
+  // Each tool returns a plain-object result that gets JSON-stringified
+  // and fed back to the LLM as a role:"tool" message. Errors surface via
+  // {ok:false, error} — never throw across the message boundary, so the
+  // model can recover (pick a different target, retry, etc.).
+  function execTool(tool, args) {
+    try {
+      switch (tool) {
+        case "click": {
+          const el = document.querySelector(String(args.target || ""));
+          if (!el) return { ok: false, error: `element not found: ${args.target}` };
+          if (isDisabled(el)) return { ok: false, error: `element is disabled: ${args.target}` };
+          scrollElementIntoView(el);
+          el.click();
+          return { ok: true, message: `clicked ${describeEl(el)}` };
+        }
+        case "type": {
+          const el = document.querySelector(String(args.target || ""));
+          if (!el) return { ok: false, error: `element not found: ${args.target}` };
+          if (typeof args.text !== "string") return { ok: false, error: "type requires text" };
+          typeIntoInput(el, args.text, {});
+          return { ok: true, message: `typed ${JSON.stringify(args.text.slice(0, 60))} into ${describeEl(el)}` };
+        }
+        case "scroll": {
+          const dir = String(args.direction || "down").toLowerCase();
+          const amount = Number.isFinite(args.amount) ? args.amount : Math.round(window.innerHeight * 0.8);
+          if (dir === "top") window.scrollTo({ top: 0, behavior: "smooth" });
+          else if (dir === "bottom") window.scrollTo({ top: document.documentElement.scrollHeight, behavior: "smooth" });
+          else if (dir === "up") window.scrollBy({ top: -amount, behavior: "smooth" });
+          else window.scrollBy({ top: amount, behavior: "smooth" });
+          return { ok: true, message: `scrolled ${dir}${dir === "up" || dir === "down" ? ` by ${amount}px` : ""}` };
+        }
+        case "readText": {
+          if (!args.target) {
+            const text = ((document.body && document.body.innerText) || "").slice(0, 5000);
+            return { ok: true, text };
+          }
+          const el = document.querySelector(String(args.target));
+          if (!el) return { ok: false, error: `element not found: ${args.target}` };
+          const raw = (el.innerText || el.value || el.textContent || "").trim();
+          return { ok: true, text: raw.slice(0, 5000) };
+        }
+        case "getSnapshot": {
+          return { ok: true, snapshot: collectCompactSnapshot() };
+        }
+        default:
+          return { ok: false, error: `unknown tool: ${tool}` };
+      }
+    } catch (err) {
+      return { ok: false, error: err && err.message ? err.message : String(err) };
+    }
+  }
+
+  function describeEl(el) {
+    const tag = el.tagName.toLowerCase();
+    const name = accessibleName(el);
+    if (name) return `<${tag}> "${name.slice(0, 40)}"`;
+    if (el.id) return `<${tag}#${el.id}>`;
+    return `<${tag}>`;
+  }
 
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     const type = msg && msg.type;

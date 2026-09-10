@@ -46,6 +46,7 @@ export const SETTING_KEYS = Object.freeze([
   "byokApiKey",       // string — stored in chrome.storage.local (device-scoped)
   "byokModel",        // string — provider-specific model id
   "mcpServers",       // JSON string — array of {name, url, headers?, enabled?}
+  "chatHistory",      // JSON string — array of {role, content, tool_calls?, tool_call_id?}
 ]);
 
 export const SETTING_DEFAULTS = Object.freeze({
@@ -57,6 +58,7 @@ export const SETTING_DEFAULTS = Object.freeze({
   byokApiKey: "",
   byokModel: "",
   mcpServers: "[]",
+  chatHistory: "[]",
 });
 
 function newRequestId() {

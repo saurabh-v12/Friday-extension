@@ -270,3 +270,75 @@ const IMPLS = {
   [BYOK_PROVIDERS.OPENAI]: callOpenAI,
   [BYOK_PROVIDERS.GROQ]: callGroq,
 };
+
+// ─── Tool-calling multi-turn chat (Task: CONTROLLING) ────────────────
+//
+// A different entry point from callByok() because the shape is very
+// different: we pass a full `messages` array (system + user + assistant
+// + tool results) and a `tools` schema, and we get back the whole
+// assistant message including any `tool_calls`. Callers loop:
+//   1. chatWithTools(messages, tools) → assistant msg
+//   2. if msg.tool_calls: run each, append role:"tool" replies, GOTO 1
+//   3. else: msg.content is the final answer
+//
+// OpenAI and Groq speak the same OpenAI-compatible shape. Gemini uses
+// a different tool format (functionDeclarations / functionResponse); we
+// throw a clear error for now so the caller can fall back.
+export async function chatWithTools({ provider, apiKey, model, messages, tools, temperature = 0, maxTokens = 1024 }) {
+  if (!apiKey) throw new Error("chatWithTools: missing API key");
+  if (!Array.isArray(messages) || !messages.length) throw new Error("chatWithTools: messages required");
+  let m = model;
+  if (!m || looksLikeProviderName(m, provider)) m = DEFAULT_MODELS[provider];
+  const impl = TOOL_IMPLS[provider];
+  if (!impl) throw new Error(`chatWithTools: provider "${provider}" doesn't support tool calling yet — switch to OpenAI or Groq`);
+  return impl({ apiKey, model: m, messages, tools, temperature, maxTokens });
+}
+
+async function chatOpenAICompatible(endpoint, providerLabel, { apiKey, model, messages, tools, temperature, maxTokens }) {
+  const body = {
+    model,
+    temperature,
+    max_tokens: maxTokens,
+    messages,
+  };
+  if (tools && tools.length) {
+    body.tools = tools;
+    body.tool_choice = "auto";
+  }
+  const res = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const txt = await res.text();
+    let msg = txt;
+    try { msg = JSON.parse(txt)?.error?.message || txt; } catch (_) { /* keep raw */ }
+    const err = new Error(`${providerLabel} ${res.status}: ${String(msg).slice(0, 300)}`);
+    err.status = res.status;
+    throw err;
+  }
+  const data = await res.json();
+  const choice = data?.choices?.[0] || {};
+  return {
+    message: choice.message || { role: "assistant", content: "" },
+    finishReason: choice.finish_reason || "stop",
+    usage: data.usage || null,
+    model: data.model || model,
+  };
+}
+
+const TOOL_IMPLS = {
+  [BYOK_PROVIDERS.OPENAI]: (args) => chatOpenAICompatible("https://api.openai.com/v1/chat/completions", "OpenAI", args),
+  [BYOK_PROVIDERS.GROQ]:   (args) => chatOpenAICompatible("https://api.groq.com/openai/v1/chat/completions", "Groq", args),
+};
+
+// True if the provider supports tool-calling through our wrapper. UI
+// uses this to decide whether to route through chatWithTools or fall
+// back to the plain callByok text path.
+export function supportsToolCalling(provider) {
+  return provider === BYOK_PROVIDERS.OPENAI || provider === BYOK_PROVIDERS.GROQ;
+}

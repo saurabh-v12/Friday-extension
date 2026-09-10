@@ -83,6 +83,23 @@ const handlers = {
     return { tabId: tab.id, tabUrl: tab.url, ...data };
   },
 
+  // Tool calls from the chat agent. Most go to the content script, but
+  // `goto` needs chrome.tabs.update which is only available here.
+  async [MESSAGE_TYPES.EXEC_TOOL](payload) {
+    const { tool, args } = payload || {};
+    if (tool === "goto") {
+      const url = args && args.url;
+      if (!url || typeof url !== "string") return { ok: false, error: "goto requires a url string" };
+      if (!isInjectableUrl(url)) return { ok: false, error: `goto refused — http(s) only, got ${url}` };
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!tab || !tab.id) return { ok: false, error: "no active tab" };
+      await chrome.tabs.update(tab.id, { url });
+      return { ok: true, message: `navigating to ${url}` };
+    }
+    const tab = await ensureContentInActiveTab();
+    return sendToTab(tab.id, MESSAGE_TYPES.EXEC_TOOL, { tool, args });
+  },
+
   async [MESSAGE_TYPES.CAPTURE_TAB](payload) {
     const tab = await ensureContentInActiveTab();
     // Run capture + snapshot in parallel — one is a Chrome API call from the
