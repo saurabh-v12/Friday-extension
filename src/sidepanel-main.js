@@ -498,7 +498,7 @@ function friendlyError(msg) {
     return "Cloud API key issue. Open Settings and paste a valid key for your chosen provider.";
   }
   if (/tool[-_ ]?call(ing|s)?\b/i.test(msg) && /not support/i.test(msg)) {
-    return "This model doesn't support tool calling. Pick a tool-capable model in Settings (e.g. Groq: llama-3.3-70b-versatile, OpenAI: gpt-4o-mini).";
+    return "This model doesn't support tool calling. Pick a tool-capable model in Settings (e.g. Groq: openai/gpt-oss-20b, OpenAI: gpt-4o-mini).";
   }
   if (/MCP/i.test(msg)) {
     return `${msg} — check Settings → MCP servers.`;

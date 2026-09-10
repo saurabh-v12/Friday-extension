@@ -23,7 +23,7 @@ export const BYOK_PROVIDERS = Object.freeze({
 export const DEFAULT_MODELS = Object.freeze({
   gemini: "gemini-2.0-flash",
   openai: "gpt-4o-mini",
-  groq: "llama-3.3-70b-versatile",
+  groq: "openai/gpt-oss-20b",
 });
 
 // Curated list of TOOL-CALLING-CAPABLE models per provider, top = default.
@@ -40,7 +40,7 @@ export const DEFAULT_MODELS = Object.freeze({
 export const KNOWN_MODELS = Object.freeze({
   gemini: ["gemini-2.0-flash", "gemini-2.5-flash", "gemini-1.5-flash"],
   openai: ["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini"],
-  groq: ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "openai/gpt-oss-120b"],
+  groq: ["openai/gpt-oss-20b", "openai/gpt-oss-120b", "groq/compound-mini", "groq/compound"],
 });
 
 // True if `model` looks like the user typed the provider name into the
