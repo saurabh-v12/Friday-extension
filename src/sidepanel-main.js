@@ -16,6 +16,7 @@ import {
   sendToBackground,
 } from "./messaging.js";
 import { loadModel, detectWebGPU, state as modelState } from "./model.js";
+import { runPrivacyPipeline, KIND_LABEL } from "./pipeline.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -115,6 +116,7 @@ function wireDeviceToggle() {
 
 function openSettings() {
   $("emptyState").hidden = true;
+  $("receiptView").hidden = true;
   $("settingsView").hidden = false;
   renderMode();
   renderDeviceToggle();
@@ -122,7 +124,12 @@ function openSettings() {
 }
 function closeSettings() {
   $("settingsView").hidden = true;
-  $("emptyState").hidden = false;
+  // Return to whichever body view was showing before settings opened.
+  if (lastReceipt) {
+    $("receiptView").hidden = false;
+  } else {
+    $("emptyState").hidden = false;
+  }
 }
 
 function wireSettings() {
@@ -132,6 +139,110 @@ function wireSettings() {
     if (e.key === "Escape" && !$("settingsView").hidden) closeSettings();
   });
 }
+
+// ─── Privacy scan + receipt ──────────────────────────────────────────
+
+let scanInFlight = false;
+let lastReceipt = null;
+
+function openReceiptView() {
+  $("emptyState").hidden = true;
+  $("settingsView").hidden = true;
+  $("receiptView").hidden = false;
+}
+function closeReceiptView() {
+  $("receiptView").hidden = true;
+  $("emptyState").hidden = false;
+}
+
+function renderReceipt(result) {
+  const { counts, redaction, totalMs, capture } = result;
+  $("receiptTotal").textContent = String(counts.total);
+
+  const list = $("receiptList");
+  list.innerHTML = "";
+  const kinds = Object.keys(counts.perKind).sort((a, b) => counts.perKind[b] - counts.perKind[a]);
+  if (kinds.length === 0) {
+    const li = document.createElement("li");
+    li.className = "receipt-list-empty";
+    li.textContent = "No PII detected on this page.";
+    list.appendChild(li);
+  } else {
+    for (const k of kinds) {
+      const li = document.createElement("li");
+      li.className = "receipt-item";
+      li.innerHTML =
+        `<span class="receipt-item-dot" aria-hidden="true"></span>` +
+        `<span class="receipt-item-label">${KIND_LABEL[k] || k}</span>` +
+        `<span class="receipt-item-count">${counts.perKind[k]}</span>`;
+      list.appendChild(li);
+    }
+  }
+
+  const previewWrap = $("receiptPreviewWrap");
+  const preview = $("receiptPreview");
+  if (redaction && redaction.dataUrl) {
+    preview.src = redaction.dataUrl;
+    previewWrap.hidden = false;
+  } else {
+    previewWrap.hidden = true;
+  }
+
+  const meta = [];
+  meta.push(`DOM: ${counts.perSource.dom}`);
+  meta.push(`Faces: ${counts.perSource.blazeface}`);
+  meta.push(`OCR: ${counts.perSource.ocr}`);
+  meta.push(`Total: ${totalMs.toFixed(0)} ms`);
+  if (capture && capture.page) meta.push(new URL(capture.page.url).hostname);
+  $("receiptMeta").textContent = meta.join(" • ");
+}
+
+async function runScan() {
+  if (scanInFlight) return;
+  scanInFlight = true;
+  const scanBtn = $("scanBtn");
+  const rescanBtn = $("receiptRescanBtn");
+  if (scanBtn) { scanBtn.disabled = true; scanBtn.textContent = "Scanning…"; }
+  if (rescanBtn) { rescanBtn.disabled = true; rescanBtn.textContent = "Scanning…"; }
+  try {
+    const result = await runPrivacyPipeline({
+      onPhase: (phase) => {
+        const label =
+          phase === "capturing" ? "Capturing screen…" :
+          phase === "detecting" ? "Detecting PII (faces + OCR)…" :
+          phase === "redacting" ? "Redacting…" : phase;
+        if (scanBtn) scanBtn.textContent = label;
+        if (rescanBtn) rescanBtn.textContent = label;
+      },
+    });
+    lastReceipt = result;
+    renderReceipt(result);
+    openReceiptView();
+  } catch (err) {
+    const msg = err && err.message ? err.message : String(err);
+    console.error("[friday.sidepanel] scan failed:", err);
+    // Show error inline on the empty-state so the user isn't lost.
+    if (scanBtn) scanBtn.textContent = `Scan failed — ${msg.slice(0, 40)}`;
+    setTimeout(() => { if (scanBtn) scanBtn.textContent = "Run privacy scan"; }, 4000);
+  } finally {
+    scanInFlight = false;
+    if (scanBtn) { scanBtn.disabled = false; if (!scanBtn.textContent.startsWith("Scan failed")) scanBtn.textContent = "Run privacy scan"; }
+    if (rescanBtn) { rescanBtn.disabled = false; rescanBtn.textContent = "Scan again"; }
+  }
+}
+
+function wireReceipt() {
+  const scanBtn = $("scanBtn");
+  if (scanBtn) scanBtn.addEventListener("click", runScan);
+  $("receiptCloseBtn").addEventListener("click", closeReceiptView);
+  $("receiptRescanBtn").addEventListener("click", runScan);
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !$("receiptView").hidden) closeReceiptView();
+  });
+}
+
+// Re-add "Run privacy scan" button after we replaced emptyState innerHTML —
+// safe because sidepanel.html now declares #scanBtn directly.
 
 // ─── VLM opt-in + first-run download ─────────────────────────────────
 
@@ -214,4 +325,5 @@ document.addEventListener("DOMContentLoaded", async () => {
   wireDeviceToggle();
   wireSettings();
   wireVlm();
+  wireReceipt();
 });
