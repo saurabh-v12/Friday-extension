@@ -21,7 +21,7 @@ import { runAgent, needsPage, DEFAULT_MAX_STEPS } from "./agent.js";
 import { SOURCES } from "./router.js";
 import { isSttSupported, startDictation, speak, isTtsSupported, startWakeWord } from "./voice.js";
 import { runChatTurn } from "./chatAgent.js";
-import { supportsToolCalling } from "./byok.js";
+import { supportsToolCalling, chatPlain } from "./byok.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -309,8 +309,12 @@ function escapeHtml(s) {
 //     path. Kept as fallback for Gemini or local reasoning; the composer
 //     bounces through it so users still get *something* even when
 //     tool-calling isn't wired up for their provider.
-function pickSubmitFlow(source, provider) {
-  if (source === "byok" && supportsToolCalling(provider)) return "chat-tools";
+function pickSubmitFlow(source, provider, mode) {
+  // Chat mode → plain provider chat completion (no snapshot, no tools).
+  // Agent mode + tool-capable provider → the SEEING/CONTROLLING tool loop.
+  // Local or anything else → legacy vision+ReAct agent path.
+  if (source === "byok" && mode === "chat") return "chat-plain";
+  if (source === "byok" && mode === "agent" && supportsToolCalling(provider)) return "chat-tools";
   return "legacy-agent";
 }
 
@@ -325,7 +329,7 @@ async function onSubmitComposer(e) {
   const source = settings.reasoningSource || "local";
   const mode = settings.mode || "chat";
   const provider = settings.byokProvider || "gemini";
-  const flow = pickSubmitFlow(source, provider);
+  const flow = pickSubmitFlow(source, provider, mode);
 
   const cloudUnusable = source === "byok" && !settings.byokApiKey;
   if (cloudUnusable) {
@@ -341,7 +345,9 @@ async function onSubmitComposer(e) {
   appendUserBubble(task);
 
   try {
-    if (flow === "chat-tools") {
+    if (flow === "chat-plain") {
+      await runChatPlainFlow({ task, provider });
+    } else if (flow === "chat-tools") {
       await runChatToolsFlow({ task, mode, provider });
     } else {
       await runLegacyAgentFlow({ task, mode, source });
@@ -356,6 +362,33 @@ async function onSubmitComposer(e) {
     setComposerBusy(false);
     $("runStatus").textContent = "Chat";
   }
+}
+
+// Plain chat: no snapshot, no tools. The demo happy path — Chat mode +
+// BYOK → provider chat completion → answer. SEEING/CONTROLLING (the
+// tool-calling loop) is reserved for Agent mode.
+async function runChatPlainFlow({ task, provider }) {
+  const statusRow = appendStatusRow("Thinking…");
+  const messages = [
+    { role: "system", content: "You are Friday, a concise and helpful browser-side assistant." },
+    ...chatHistory,
+    { role: "user", content: task },
+  ];
+  let text = "";
+  try {
+    text = await chatPlain({
+      provider,
+      apiKey: settings.byokApiKey,
+      model: settings.byokModel,
+      messages,
+    });
+  } finally {
+    if (statusRow) statusRow.remove();
+  }
+  appendAssistantBubble(text || "(empty reply)");
+  chatHistory.push({ role: "user", content: task });
+  chatHistory.push({ role: "assistant", content: text || "" });
+  await persistChatHistory();
 }
 
 async function runChatToolsFlow({ task, mode, provider }) {

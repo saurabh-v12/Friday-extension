@@ -237,3 +237,67 @@ const TOOL_IMPLS = {
 export function supportsToolCalling(provider) {
   return provider === BYOK_PROVIDERS.OPENAI || provider === BYOK_PROVIDERS.GROQ;
 }
+
+// ─── Plain multi-turn chat (no tools, no page snapshot) ─────────────
+//
+// Used by Chat mode. Takes a `messages` array in OpenAI shape
+// ([{role:"system"|"user"|"assistant", content}]) and returns the
+// assistant's text as a string. All three providers supported —
+// OpenAI/Groq via chatOpenAICompatible without a `tools` payload,
+// Gemini via v1beta generateContent (system → systemInstruction,
+// assistant → role:"model").
+export async function chatPlain({ provider, apiKey, model, messages, temperature = 0.4, maxTokens = 1024 }) {
+  if (!apiKey) throw new Error("chatPlain: missing API key");
+  if (!Array.isArray(messages) || !messages.length) throw new Error("chatPlain: messages required");
+  let m = model;
+  if (!m || looksLikeProviderName(m, provider)) m = DEFAULT_MODELS[provider];
+
+  if (provider === BYOK_PROVIDERS.OPENAI) {
+    const res = await chatOpenAICompatible("https://api.openai.com/v1/chat/completions", "OpenAI",
+      { apiKey, model: m, messages, tools: null, temperature, maxTokens });
+    return (res.message?.content || "").trim();
+  }
+  if (provider === BYOK_PROVIDERS.GROQ) {
+    const res = await chatOpenAICompatible("https://api.groq.com/openai/v1/chat/completions", "Groq",
+      { apiKey, model: m, messages, tools: null, temperature, maxTokens });
+    return (res.message?.content || "").trim();
+  }
+  if (provider === BYOK_PROVIDERS.GEMINI) {
+    return chatGeminiPlain({ apiKey, model: m, messages, temperature, maxTokens });
+  }
+  throw new Error(`chatPlain: unknown provider "${provider}"`);
+}
+
+async function chatGeminiPlain({ apiKey, model, messages, temperature, maxTokens }) {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
+  const systemParts = [];
+  const contents = [];
+  for (const msg of messages) {
+    const text = typeof msg.content === "string" ? msg.content : "";
+    if (msg.role === "system") systemParts.push({ text });
+    else if (msg.role === "user") contents.push({ role: "user", parts: [{ text }] });
+    else if (msg.role === "assistant") contents.push({ role: "model", parts: [{ text }] });
+    // Ignore role:"tool" — plain chat doesn't include tool results.
+  }
+  const body = {
+    contents,
+    generationConfig: { temperature, maxOutputTokens: maxTokens },
+  };
+  if (systemParts.length) body.systemInstruction = { parts: systemParts };
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const txt = await res.text();
+    let msg = txt;
+    try { msg = JSON.parse(txt)?.error?.message || txt; } catch (_) { /* keep raw */ }
+    const err = new Error(`Gemini ${res.status}: ${String(msg).slice(0, 300)}`);
+    err.status = res.status;
+    throw err;
+  }
+  const data = await res.json();
+  const parts = data?.candidates?.[0]?.content?.parts || [];
+  return parts.map((p) => p.text || "").join("").trim();
+}
