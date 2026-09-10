@@ -44,17 +44,15 @@ function splitDataUrl(dataUrl) {
 // ─── Google Gemini (v1beta generateContent) ─────────────────────────
 async function callGemini({ apiKey, model, prompt, imageDataUrl }) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
-  const { mime, base64 } = splitDataUrl(imageDataUrl);
+  // Text-only path: skip the inline_data image part entirely.
+  const parts = [];
+  if (imageDataUrl) {
+    const { mime, base64 } = splitDataUrl(imageDataUrl);
+    parts.push({ inline_data: { mime_type: mime, data: base64 } });
+  }
+  parts.push({ text: prompt });
   const body = {
-    contents: [
-      {
-        role: "user",
-        parts: [
-          { inline_data: { mime_type: mime, data: base64 } },
-          { text: prompt },
-        ],
-      },
-    ],
+    contents: [{ role: "user", parts }],
     generationConfig: { temperature: 0, maxOutputTokens: 512 },
   };
   const res = await fetch(url, {
@@ -67,26 +65,22 @@ async function callGemini({ apiKey, model, prompt, imageDataUrl }) {
     throw new Error(`Gemini ${res.status}: ${err.slice(0, 200)}`);
   }
   const data = await res.json();
-  const parts = data?.candidates?.[0]?.content?.parts || [];
-  return parts.map((p) => p.text || "").join("").trim();
+  const respParts = data?.candidates?.[0]?.content?.parts || [];
+  return respParts.map((p) => p.text || "").join("").trim();
 }
 
 // ─── OpenAI (Chat Completions with image content parts) ─────────────
 async function callOpenAI({ apiKey, model, prompt, imageDataUrl }) {
   const url = "https://api.openai.com/v1/chat/completions";
+  const content = [{ type: "text", text: prompt }];
+  if (imageDataUrl) {
+    content.push({ type: "image_url", image_url: { url: imageDataUrl } });
+  }
   const body = {
     model,
     temperature: 0,
     max_tokens: 512,
-    messages: [
-      {
-        role: "user",
-        content: [
-          { type: "text", text: prompt },
-          { type: "image_url", image_url: { url: imageDataUrl } },
-        ],
-      },
-    ],
+    messages: [{ role: "user", content }],
   };
   const res = await fetch(url, {
     method: "POST",
@@ -107,19 +101,15 @@ async function callOpenAI({ apiKey, model, prompt, imageDataUrl }) {
 // ─── Groq (OpenAI-compatible API) ───────────────────────────────────
 async function callGroq({ apiKey, model, prompt, imageDataUrl }) {
   const url = "https://api.groq.com/openai/v1/chat/completions";
+  const content = [{ type: "text", text: prompt }];
+  if (imageDataUrl) {
+    content.push({ type: "image_url", image_url: { url: imageDataUrl } });
+  }
   const body = {
     model,
     temperature: 0,
     max_tokens: 512,
-    messages: [
-      {
-        role: "user",
-        content: [
-          { type: "text", text: prompt },
-          { type: "image_url", image_url: { url: imageDataUrl } },
-        ],
-      },
-    ],
+    messages: [{ role: "user", content }],
   };
   const res = await fetch(url, {
     method: "POST",

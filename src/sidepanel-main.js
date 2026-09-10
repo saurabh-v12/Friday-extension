@@ -17,7 +17,7 @@ import {
 } from "./messaging.js";
 import { loadModel, detectWebGPU, state as modelState } from "./model.js";
 import { runPrivacyPipeline, KIND_LABEL } from "./pipeline.js";
-import { runAgent, DEFAULT_MAX_STEPS } from "./agent.js";
+import { runAgent, needsPage, DEFAULT_MAX_STEPS } from "./agent.js";
 import { SOURCES } from "./router.js";
 import { isSttSupported, startDictation, speak, isTtsSupported, startWakeWord } from "./voice.js";
 
@@ -212,6 +212,9 @@ async function onSubmitComposer(e) {
   input.value = "";
 
   const source = settings.reasoningSource || "local";
+  const mode = settings.mode || "chat";
+  const willNeedPage = needsPage(task, mode);
+
   const cloudUnusable = source === "byok" && !settings.byokApiKey;
   if (cloudUnusable) {
     openRunView(task);
@@ -221,9 +224,9 @@ async function onSubmitComposer(e) {
     );
     return;
   }
-  // Warn when picking local without VLM enabled — router will still call
-  // the local branch, which will attempt to download the VLM on the fly.
-  if (source === "local" && !settings.vlmEnabled) {
+  // Warn only for page tasks — chat-only won't try to load the VLM at all
+  // (router surfaces a friendly `say` telling the user to switch to Cloud).
+  if (willNeedPage && source === "local" && !settings.vlmEnabled) {
     openRunView(task);
     appendTraceRow(
       `<div class="trace-step-body"><div class="trace-step-title">On-Device mode without VLM.</div><div class="trace-step-meta">Enable "Local VLM (optional)" in Settings, or switch the header toggle to Cloud (BYOK) — otherwise the router has no reasoning source.</div></div>`,
@@ -239,6 +242,7 @@ async function onSubmitComposer(e) {
   try {
     const result = await runAgent({
       task,
+      mode,
       source,
       config: source === "byok" ? {
         provider: settings.byokProvider,
@@ -248,7 +252,12 @@ async function onSubmitComposer(e) {
       mcpServers: parseMcpServers(),
       maxSteps: DEFAULT_MAX_STEPS,
       onStep: (evt) => {
-        if (evt.phase === "observe") {
+        if (evt.phase === "chat-only") {
+          appendTraceRow(
+            `<div class="trace-step-body">Answering (no page context)…</div>`,
+            "trace-step--observing",
+          );
+        } else if (evt.phase === "observe") {
           currentObserveDiv = appendTraceRow(
             `<div class="trace-step-body">Step ${evt.step} — capturing + detecting…</div>`,
             "trace-step--observing",

@@ -22,9 +22,9 @@ export const SOURCES = Object.freeze({ LOCAL: "local", BYOK: "byok" });
 // Public dispatch. `source` is one of SOURCES; `config` is source-specific:
 //   local: {}
 //   byok:  {provider, apiKey, model}
-export async function route({ task, payload, source, config, mcpTools }) {
-  if (source === SOURCES.LOCAL) return routeLocal({ task, payload, config, mcpTools });
-  if (source === SOURCES.BYOK) return routeByok({ task, payload, config, mcpTools });
+export async function route({ task, payload, source, config, mcpTools, chatOnly = false }) {
+  if (source === SOURCES.LOCAL) return routeLocal({ task, payload, config, mcpTools, chatOnly });
+  if (source === SOURCES.BYOK) return routeByok({ task, payload, config, mcpTools, chatOnly });
   throw new Error(`route: unknown source "${source}"`);
 }
 
@@ -35,7 +35,21 @@ export async function route({ task, payload, source, config, mcpTools }) {
 // we ask for a short structured answer, then try to parse a JSON action;
 // on parse failure we return `{type:'say'}` with the raw text.
 
-async function routeLocal({ task, payload, mcpTools }) {
+async function routeLocal({ task, payload, mcpTools, chatOnly }) {
+  // Chat-only: SmolVLM is image-only, so we don't have a local text model to
+  // route to. Surface a friendly `say` so the user can switch — better than
+  // silently downloading a 250 MB VLM that won't help.
+  if (chatOnly) {
+    return {
+      source: SOURCES.LOCAL,
+      raw: "",
+      action: {
+        type: "say",
+        text: "I don't have a local text-only model yet. Flip the header toggle to Cloud (add a key in Settings) for plain chat, or ask me something about the current page.",
+      },
+      meta: { chatOnly: true },
+    };
+  }
   if (!modelState.model) {
     await loadModel({ preferWebGPU: true });
   }
@@ -54,27 +68,45 @@ async function routeLocal({ task, payload, mcpTools }) {
 
 // ─── BYOK cloud (Task 4.3 wires the settings/UI; router just calls it) ─
 
-async function routeByok({ task, payload, config, mcpTools }) {
+async function routeByok({ task, payload, config, mcpTools, chatOnly }) {
   if (!config || !config.apiKey) {
     throw new Error("BYOK: no API key set (open Settings → Cloud API key)");
   }
   const { callByok } = await import("./byok.js");
   const t0 = performance.now();
+  const prompt = chatOnly ? buildChatPrompt(task) : buildPrompt(task, payload, { mcpTools });
   const output = await callByok({
     provider: config.provider,
     apiKey: config.apiKey,
     model: config.model,
-    prompt: buildPrompt(task, payload, { mcpTools }),
-    imageDataUrl: payload.image.dataUrl,
+    prompt,
+    imageDataUrl: chatOnly ? null : payload.image.dataUrl,
   });
   const latencyMs = performance.now() - t0;
-  const action = parseAction(output);
+  // Chat replies are plain text; wrap as a `say` action so the loop treats
+  // them uniformly. Page replies must be structured JSON — parse those.
+  const action = chatOnly
+    ? { type: "say", text: output }
+    : parseAction(output);
   return {
     source: SOURCES.BYOK,
     raw: output,
     action,
-    meta: { latencyMs, provider: config.provider, model: config.model },
+    meta: { latencyMs, provider: config.provider, model: config.model, chatOnly },
   };
+}
+
+// Text-only prompt (Fix 1). No JSON schema, no elements — plain chat.
+function buildChatPrompt(task) {
+  return [
+    "You are Friday, a helpful, concise assistant. The user is chatting with",
+    "you outside of any page context — do not ask about the current page or",
+    "suggest UI actions. Reply in plain text.",
+    "",
+    `User: ${task}`,
+    "",
+    "Friday:",
+  ].join("\n");
 }
 
 // ─── Prompt + parser ─────────────────────────────────────────────────
