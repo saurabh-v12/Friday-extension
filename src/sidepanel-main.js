@@ -27,6 +27,20 @@ const MODE_LABELS = { chat: "Chat", agent: "Agent" };
 
 let settings = { ...SETTING_DEFAULTS };
 
+// ─── View state machine (FIX 3) ──────────────────────────────────────
+//
+// Exactly one of: 'home' | 'run' | 'receipt' | 'settings'. Everything
+// else is derived from this — CSS shows one section, hides the others.
+// Replaces the old per-section `.hidden = true` toggles, which lost a
+// specificity race with `.run-view { display: flex; }` and let the run
+// card ghost through as an empty "TASK ✕" bar on the home screen.
+const VIEWS = Object.freeze({ HOME: "home", RUN: "run", RECEIPT: "receipt", SETTINGS: "settings" });
+
+function setView(name) {
+  document.body.dataset.view = name;
+}
+function getView() { return document.body.dataset.view || VIEWS.HOME; }
+
 // ─── Persistence helpers ──────────────────────────────────────────────
 
 async function loadSettings() {
@@ -130,9 +144,7 @@ function wireDeviceToggle() {
 // ─── Settings gear ────────────────────────────────────────────────────
 
 function openSettings() {
-  $("emptyState").hidden = true;
-  $("receiptView").hidden = true;
-  $("settingsView").hidden = false;
+  setView(VIEWS.SETTINGS);
   renderMode();
   renderDeviceToggle();
   renderVlmToggle();
@@ -140,20 +152,16 @@ function openSettings() {
   renderMcp();
 }
 function closeSettings() {
-  $("settingsView").hidden = true;
-  // Return to whichever body view was showing before settings opened.
-  if (lastReceipt) {
-    $("receiptView").hidden = false;
-  } else {
-    $("emptyState").hidden = false;
-  }
+  // The X (and Escape) always returns to home. Simpler mental model than
+  // remembering the previous view — receipt and run are one click away.
+  setView(VIEWS.HOME);
 }
 
 function wireSettings() {
   $("settingsBtn").addEventListener("click", openSettings);
   $("settingsBackBtn").addEventListener("click", closeSettings);
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && !$("settingsView").hidden) closeSettings();
+    if (e.key === "Escape" && getView() === VIEWS.SETTINGS) closeSettings();
   });
 }
 
@@ -162,20 +170,16 @@ function wireSettings() {
 let agentInFlight = false;
 
 function openRunView(task) {
-  $("emptyState").hidden = true;
-  $("settingsView").hidden = true;
-  $("receiptView").hidden = true;
-  $("runView").hidden = false;
   $("runTask").textContent = task;
   $("runTrace").innerHTML = "";
   const finalEl = $("runFinal");
   finalEl.hidden = true;
   finalEl.classList.remove("run-final--error");
+  setView(VIEWS.RUN);
 }
 
 function closeRunView() {
-  $("runView").hidden = true;
-  $("emptyState").hidden = false;
+  setView(VIEWS.HOME);
 }
 
 function appendTraceRow(html, cls = "") {
@@ -470,13 +474,10 @@ let scanInFlight = false;
 let lastReceipt = null;
 
 function openReceiptView() {
-  $("emptyState").hidden = true;
-  $("settingsView").hidden = true;
-  $("receiptView").hidden = false;
+  setView(VIEWS.RECEIPT);
 }
 function closeReceiptView() {
-  $("receiptView").hidden = true;
-  $("emptyState").hidden = false;
+  setView(VIEWS.HOME);
 }
 
 function renderReceipt(result) {
@@ -562,7 +563,7 @@ function wireReceipt() {
   $("receiptCloseBtn").addEventListener("click", closeReceiptView);
   $("receiptRescanBtn").addEventListener("click", runScan);
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && !$("receiptView").hidden) closeReceiptView();
+    if (e.key === "Escape" && getView() === VIEWS.RECEIPT) closeReceiptView();
   });
 }
 
@@ -737,6 +738,7 @@ function wireMcp() {
 // ─── Boot ─────────────────────────────────────────────────────────────
 
 document.addEventListener("DOMContentLoaded", async () => {
+  setView(VIEWS.HOME);
   await loadSettings();
   renderMode();
   renderDeviceToggle();

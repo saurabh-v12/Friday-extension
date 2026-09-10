@@ -36,6 +36,35 @@ body {
   display: flex;
   flex-direction: column;
   min-width: 320px;
+  /* No horizontal overflow — views are swapped, not laid out side-by-side. */
+  overflow-x: hidden;
+}
+
+/* ─── View state machine ─────────────────────────────────────────────
+ *
+ * Exactly one body-scoped view is visible at a time. All four view
+ * sections are always mounted (cheaper than tearing down + rebuilding
+ * their event listeners), and body[data-view] controls which one paints.
+ *
+ * This replaces the earlier per-section `hidden` attribute juggling,
+ * which broke silently: `.run-view { display: flex; }` had higher CSS
+ * specificity than the UA-agent `[hidden] { display: none; }` rule, so
+ * setting `.hidden = true` in JS did nothing and the run view rendered
+ * as an empty "TASK ✕" card floating over the home screen.
+ */
+
+.empty-state,
+.run-view,
+.receipt-view,
+.settings-view { display: none; }
+
+body[data-view="home"] .empty-state,
+body[data-view="run"] .run-view,
+body[data-view="receipt"] .receipt-view {
+  display: flex;
+}
+body[data-view="settings"] .settings-view {
+  display: flex;
 }
 
 /* ─── Header ─────────────────────────────────────────────────────────── */
@@ -212,24 +241,22 @@ body {
 }
 
 .empty-state {
-  display: flex;
+  /* display: flex is set by body[data-view="home"] .empty-state */
   flex-direction: column;
   align-items: center;
   text-align: center;
   gap: 14px;
   max-width: 320px;
 }
-.empty-state[hidden] { display: none; }
 
 /* Settings view — replaces the empty state in-body when the gear is tapped. */
 .settings-view {
+  /* display: flex is set by body[data-view="settings"] .settings-view */
   width: 100%;
   max-width: 360px;
-  display: flex;
   flex-direction: column;
   gap: 12px;
 }
-.settings-view[hidden] { display: none; }
 
 .settings-header {
   display: flex;
@@ -511,9 +538,11 @@ body {
 /* ─── Privacy receipt card ────────────────────────────────────────── */
 
 .receipt-view {
+  /* display: flex is set by body[data-view="receipt"] .receipt-view */
   flex: 1;
   padding: 16px 14px 24px;
   overflow-y: auto;
+  flex-direction: column;
 }
 
 .receipt-card {
@@ -698,10 +727,10 @@ body {
 /* ─── Agent run view (Task 4.4) ───────────────────────────────────── */
 
 .run-view {
+  /* display: flex is set by body[data-view="run"] .run-view */
   flex: 1;
   padding: 14px 14px 24px;
   overflow-y: auto;
-  display: flex;
   flex-direction: column;
   gap: 12px;
 }
