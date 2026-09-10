@@ -17,17 +17,60 @@ export const BYOK_PROVIDERS = Object.freeze({
   GROQ: "groq",
 });
 
-// Default model per provider — the fastest cheap vision-capable option
-// per family as of late 2025. Overridable via settings.
+// Default model per provider — a currently-live vision-capable option
+// per family. Groq deprecated the `llama-3.2-*-vision-preview` line in
+// early 2025; the Llama-4 series is the successor. Overridable via
+// settings, but every value here must be a model that actually resolves
+// on the provider's public API — otherwise a blank Settings input turns
+// into a confusing 404.
 export const DEFAULT_MODELS = Object.freeze({
   gemini: "gemini-2.0-flash",
   openai: "gpt-4o-mini",
-  groq: "llama-3.2-11b-vision-preview",
+  groq: "meta-llama/llama-4-scout-17b-16e-instruct",
 });
+
+// Suggested known-good model IDs per provider — surfaced as a <select>
+// in the Settings UI so users pick from a list instead of typing "groq"
+// into the model field by mistake (that was the original 404 that
+// prompted this fix). Users can still supply a custom ID via the
+// "Custom…" option; validation just makes the common path safe.
+export const KNOWN_MODELS = Object.freeze({
+  gemini: [
+    "gemini-2.0-flash",
+    "gemini-2.0-flash-lite",
+    "gemini-1.5-flash",
+    "gemini-1.5-pro",
+  ],
+  openai: [
+    "gpt-4o-mini",
+    "gpt-4o",
+    "gpt-4.1-mini",
+  ],
+  groq: [
+    "meta-llama/llama-4-scout-17b-16e-instruct",
+    "meta-llama/llama-4-maverick-17b-128e-instruct",
+    "llama-3.3-70b-versatile",
+  ],
+});
+
+// True if `model` looks like the user typed the provider name into the
+// model field ("groq", "openai", "gemini"). We treat those as unset and
+// fall back to the default. This is the exact class of mistake that
+// caused the reported `The model "groq" does not exist` 404.
+function looksLikeProviderName(model, provider) {
+  if (!model) return false;
+  const m = String(model).trim().toLowerCase();
+  if (m === provider) return true;
+  return Object.values(BYOK_PROVIDERS).includes(m);
+}
 
 export async function callByok({ provider, apiKey, model, prompt, imageDataUrl }) {
   const p = provider || BYOK_PROVIDERS.GEMINI;
-  const m = model || DEFAULT_MODELS[p];
+  let m = model;
+  if (!m || looksLikeProviderName(m, p)) {
+    if (m) console.warn(`[friday.byok] model "${m}" looks like a provider name, not a model id — falling back to default for ${p}`);
+    m = DEFAULT_MODELS[p];
+  }
   if (!apiKey) throw new Error("BYOK: missing API key");
   const impl = IMPLS[p];
   if (!impl) throw new Error(`BYOK: unknown provider "${p}"`);

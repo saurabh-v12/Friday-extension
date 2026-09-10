@@ -173,7 +173,8 @@
             </div>
             <div class="settings-row-body">
               <input id="byokApiKeyInput" type="password" class="text-input" placeholder="Paste API key" autocomplete="off" spellcheck="false" />
-              <input id="byokModelInput" type="text" class="text-input" placeholder="Model (e.g. gemini-2.0-flash)" autocomplete="off" spellcheck="false" />
+              <select id="byokModelSel" class="text-input" aria-label="Model"></select>
+              <input id="byokModelCustom" type="text" class="text-input" placeholder="Model id, e.g. gpt-4o-mini" autocomplete="off" spellcheck="false" hidden />
               <div class="byok-actions">
                 <span class="byok-status" id="byokStatus">No key set.</span>
                 <button class="btn-primary" id="byokSaveBtn" type="button">Save</button>

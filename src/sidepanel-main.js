@@ -642,19 +642,62 @@ function wireVlm() {
 }
 
 // ─── BYOK (Cloud API key) ─────────────────────────────────────────────
+//
+// Model picker is a <select> populated from KNOWN_MODELS per provider so
+// users can't type "groq" or "openai" into the model field by mistake —
+// that specific error was the original reason this UI got tightened.
+// A "Custom…" option reveals a text input for anyone who wants to run a
+// less-common model. byok.js has a belt-and-braces guard for the same
+// mistake so even a hand-edited settings blob is protected.
 
-const BYOK_DEFAULT_MODEL = { gemini: "gemini-2.0-flash", openai: "gpt-4o-mini", groq: "llama-3.2-11b-vision-preview" };
+import { DEFAULT_MODELS as BYOK_DEFAULT_MODELS, KNOWN_MODELS as BYOK_KNOWN_MODELS } from "./byok.js";
+
+const CUSTOM_MODEL_VALUE = "__custom__";
+
+function populateByokModelSelect(provider) {
+  const sel = $("byokModelSel");
+  if (!sel) return;
+  const known = BYOK_KNOWN_MODELS[provider] || [];
+  const currentSaved = (settings.byokModel || "").trim();
+  const knownContainsSaved = currentSaved && known.includes(currentSaved);
+  sel.innerHTML = "";
+  for (const id of known) {
+    const opt = document.createElement("option");
+    opt.value = id;
+    opt.textContent = id === BYOK_DEFAULT_MODELS[provider] ? `${id}  (default)` : id;
+    sel.appendChild(opt);
+  }
+  const customOpt = document.createElement("option");
+  customOpt.value = CUSTOM_MODEL_VALUE;
+  customOpt.textContent = "Custom…";
+  sel.appendChild(customOpt);
+  if (currentSaved && !knownContainsSaved) {
+    sel.value = CUSTOM_MODEL_VALUE;
+  } else if (currentSaved && knownContainsSaved) {
+    sel.value = currentSaved;
+  } else {
+    sel.value = BYOK_DEFAULT_MODELS[provider];
+  }
+  updateByokCustomVisibility();
+}
+
+function updateByokCustomVisibility() {
+  const sel = $("byokModelSel");
+  const custom = $("byokModelCustom");
+  if (!sel || !custom) return;
+  const isCustom = sel.value === CUSTOM_MODEL_VALUE;
+  custom.hidden = !isCustom;
+  if (isCustom && !custom.value) custom.value = (settings.byokModel || "").trim();
+}
 
 function renderByok() {
   const providerSel = $("byokProviderSel");
   const keyInput = $("byokApiKeyInput");
-  const modelInput = $("byokModelInput");
   const status = $("byokStatus");
   if (!providerSel) return;
   providerSel.value = settings.byokProvider || "gemini";
   keyInput.value = settings.byokApiKey || "";
-  modelInput.value = settings.byokModel || "";
-  modelInput.placeholder = `Model (default: ${BYOK_DEFAULT_MODEL[providerSel.value]})`;
+  populateByokModelSelect(providerSel.value);
   if (settings.byokApiKey) {
     status.textContent = `Key set for ${providerSel.value}.`;
     status.classList.add("byok-status--set");
@@ -667,7 +710,22 @@ function renderByok() {
 async function onByokSave() {
   const provider = $("byokProviderSel").value;
   const apiKey = $("byokApiKeyInput").value.trim();
-  const model = $("byokModelInput").value.trim();
+  const sel = $("byokModelSel");
+  const custom = $("byokModelCustom");
+  let model = "";
+  if (sel.value === CUSTOM_MODEL_VALUE) {
+    model = (custom.value || "").trim();
+  } else {
+    model = sel.value;
+  }
+  // Reject the exact mistake that caused the 404 — save empty string so
+  // the router falls back to DEFAULT_MODELS[provider] instead of sending
+  // "groq"/"openai"/"gemini" as the model id.
+  if (model && Object.values({ gemini: 1, openai: 1, groq: 1 }).length && ["gemini", "openai", "groq"].includes(model.toLowerCase())) {
+    $("byokStatus").textContent = `"${model}" is a provider name, not a model id — using default (${BYOK_DEFAULT_MODELS[provider]}).`;
+    $("byokStatus").classList.remove("byok-status--set");
+    model = "";
+  }
   await saveSetting("byokProvider", provider);
   await saveSetting("byokApiKey", apiKey);
   await saveSetting("byokModel", model);
@@ -678,10 +736,11 @@ function wireByok() {
   const providerSel = $("byokProviderSel");
   if (!providerSel) return;
   providerSel.addEventListener("change", () => {
-    // Update placeholder when provider changes so the user sees the right default.
-    const modelInput = $("byokModelInput");
-    modelInput.placeholder = `Model (default: ${BYOK_DEFAULT_MODEL[providerSel.value]})`;
+    // Repopulate the model list to match the newly-selected provider.
+    populateByokModelSelect(providerSel.value);
   });
+  const sel = $("byokModelSel");
+  if (sel) sel.addEventListener("change", updateByokCustomVisibility);
   $("byokSaveBtn").addEventListener("click", onByokSave);
 }
 
