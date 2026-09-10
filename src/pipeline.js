@@ -71,6 +71,82 @@ export async function runPrivacyPipeline({ mode = REDACT_MODES.BLUR, onPhase } =
   };
 }
 
+// Assemble the exact payload a Phase-4 cloud call would send. Redacted
+// screenshot + "safe DOM": each element's `value` is stripped or replaced
+// with a `{masked:true, kind}` shape descriptor for any element that was
+// flagged as PII. Nothing raw ever crosses the wire — the privacy boundary
+// is right here, before we hand anything to the Brain Router.
+//
+// `receipt` is the output of `runPrivacyPipeline()`.
+//
+// Options:
+//   `keepUrl` (default false) — if false, `page.url` is reduced to
+//     `{host, path}` without query string/hash (which frequently carry
+//     session tokens, tracking IDs, etc.). Set true only if the caller
+//     really needs the full URL for the task.
+export function buildSanitizedPayload(receipt, { keepUrl = false } = {}) {
+  if (!receipt) throw new Error("buildSanitizedPayload: receipt is required");
+  const { capture, redaction, counts, regions, totalMs } = receipt;
+
+  // Elements marked as PII in capture.pii get their `value` stripped and
+  // replaced with a `{masked:true, kind}` shape descriptor.
+  const domHitByFid = new Map();
+  for (const h of ((capture.pii && capture.pii.hits) || [])) {
+    const primary = h.kinds && h.kinds[0] ? h.kinds[0].kind : "unknown";
+    domHitByFid.set(h.fid, primary);
+  }
+  const safeElements = (capture.elements || []).map((el) => {
+    const kind = domHitByFid.get(el.fid);
+    if (!kind) return el;
+    // Already a mask descriptor from content.js (password/sensitive
+    // autocomplete) — keep it, just annotate the kind.
+    if (el.value && typeof el.value === "object" && el.value.masked) {
+      return { ...el, value: { ...el.value, kind } };
+    }
+    // Regular value that our detector flagged — replace it.
+    if (el.value !== undefined) {
+      const length = typeof el.value === "string" ? el.value.length : undefined;
+      return { ...el, value: { masked: true, kind, length } };
+    }
+    return { ...el, piiKind: kind };
+  });
+
+  const url = capture.page && capture.page.url ? new URL(capture.page.url) : null;
+  const safePage = keepUrl
+    ? capture.page
+    : {
+        host: url ? url.host : "",
+        path: url ? url.pathname : "",
+        title: capture.page ? capture.page.title : "",
+        readyState: capture.page ? capture.page.readyState : "",
+      };
+
+  return {
+    image: {
+      dataUrl: redaction ? redaction.dataUrl : capture.screenshot,
+      width: redaction ? redaction.width : null,
+      height: redaction ? redaction.height : null,
+      redacted: !!redaction,
+    },
+    page: safePage,
+    viewport: capture.viewport,
+    elements: safeElements,
+    elementCount: safeElements.length,
+    receipt: {
+      total: counts.total,
+      perKind: counts.perKind,
+      perSource: counts.perSource,
+      regionsApplied: redaction ? redaction.regionsApplied : 0,
+    },
+    meta: {
+      capturedAt: capture.capturedAt,
+      totalMs,
+      redactMs: redaction ? redaction.redactMs : null,
+      regionCount: (regions || []).length,
+    },
+  };
+}
+
 function summarize(regions, sources) {
   const perKind = {};
   const perSource = { dom: 0, ocr: 0, blazeface: 0 };

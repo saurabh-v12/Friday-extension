@@ -11,6 +11,7 @@ import { MESSAGE_TYPES, sendToBackground } from "./messaging.js";
 import { loadBlazeFace, detectFacesFromDataUrl } from "./faces.js";
 import { runOcrOnDataUrl } from "./ocr.js";
 import { redactImage, collectRegions, REDACT_MODES } from "./redact.js";
+import { runPrivacyPipeline, buildSanitizedPayload } from "./pipeline.js";
 
 const SAMPLE_PATH = "assets/sample-screen.png";
 const PROMPT_TEXT = "Describe this screen and list buttons and input fields";
@@ -259,6 +260,28 @@ async function onRedact() {
   }
 }
 
+async function onSafePayload() {
+  setStatus("running full pipeline…");
+  try {
+    const receipt = await runPrivacyPipeline({ onPhase: (p) => setStatus(`pipeline: ${p}…`) });
+    const payload = buildSanitizedPayload(receipt);
+    log(`[payload] regions=${payload.meta.regionCount} redacted=${payload.image.redacted} elements=${payload.elementCount}`);
+    log(`[payload] page=${payload.page.host}${payload.page.path} title="${(payload.page.title || "").slice(0, 40)}"`);
+    log(`[payload] image=${payload.image.width}x${payload.image.height} dataUrlBytes=${payload.image.dataUrl.length}`);
+    log(`[payload] receipt.perKind=${JSON.stringify(payload.receipt.perKind)}`);
+    // Verify no raw PII leaked into element values.
+    const stillRaw = payload.elements.filter((e) => typeof e.value === "string" && /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/.test(e.value));
+    if (stillRaw.length) log(`[payload.CHECK] LEAKED: ${stillRaw.length} element values still contain email-like strings`);
+    else log(`[payload.CHECK] no raw PII leaked into element values`);
+    $("captureImg").src = payload.image.dataUrl;
+    $("captureImg").style.display = "block";
+    setStatus(`payload built (${payload.receipt.total} redactions)`);
+  } catch (err) {
+    log(`[payload] FAILED — ${err && err.message ? err.message : err}`);
+    setStatus("safe payload failed");
+  }
+}
+
 async function onRunOcr() {
   if (!lastScreenshotDataUrl) {
     log("[ocr] capture the screen first (Capture button)");
@@ -298,4 +321,5 @@ document.addEventListener("DOMContentLoaded", () => {
   $("facesBtn").addEventListener("click", onDetectFaces);
   $("ocrBtn").addEventListener("click", onRunOcr);
   $("redactBtn").addEventListener("click", onRedact);
+  $("payloadBtn").addEventListener("click", onSafePayload);
 });
