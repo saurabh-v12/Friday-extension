@@ -42,9 +42,19 @@ export async function runPrivacyPipeline({ mode = REDACT_MODES.BLUR, onPhase } =
   });
 
   onPhase && onPhase("detecting");
+  // OCR is best-effort — a worker/init failure must not sink the whole
+  // scan. If it fails we log once, degrade gracefully to an empty result,
+  // and still deliver DOM PII + face detection + the receipt.
+  const emptyOcr = { text: "", words: [], textPii: [], ocrMs: 0, failed: true };
   const [faces, ocr] = await Promise.all([
-    detectFacesFromDataUrl(capture.screenshot),
-    runOcrOnDataUrl(capture.screenshot),
+    detectFacesFromDataUrl(capture.screenshot).catch((err) => {
+      console.warn("[friday.pipeline] face detection failed, continuing:", err);
+      return [];
+    }),
+    runOcrOnDataUrl(capture.screenshot).catch((err) => {
+      console.warn("[friday.pipeline] OCR failed, continuing without it:", err);
+      return { ...emptyOcr, error: err && err.message ? err.message : String(err) };
+    }),
   ]);
 
   const regions = collectRegions({

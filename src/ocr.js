@@ -11,6 +11,14 @@
 
 import { PATTERNS, PII_KIND } from "./pii.js";
 
+// Prefer chrome.runtime.getURL() in the extension — it's the idiomatic MV3
+// way to build extension URLs and avoids any relative-path ambiguity.
+// Fallback to import.meta.url for the popup dev harness or any non-extension
+// test surface that may load this module.
+const extUrl = (rel) => {
+  const hasRuntime = typeof chrome !== "undefined" && chrome.runtime && chrome.runtime.getURL;
+  return hasRuntime ? chrome.runtime.getURL(rel) : new URL("../" + rel, import.meta.url).href;
+};
 const scriptUrl = (rel) => new URL(rel, import.meta.url).href;
 
 let _workerPromise = null;
@@ -40,17 +48,32 @@ export async function loadTesseract({ onProgress } = {}) {
     const t0 = performance.now();
     onProgress && onProgress({ phase: "runtime", status: "loading" });
     if (!window.Tesseract) {
-      await injectScript(scriptUrl("../dist/vendor/tesseract/tesseract.min.js"));
+      await injectScript(extUrl("dist/vendor/tesseract/tesseract.min.js"));
     }
 
     onProgress && onProgress({ phase: "worker", status: "loading" });
     // createWorker(lang, oem, opts). oem=1 → LSTM only (faster & smaller
-    // than legacy+LSTM). Paths point at bundled files; only the trained
-    // language data comes from CDN and is cached after first use.
+    // than legacy+LSTM). Paths point at bundled files via
+    // chrome.runtime.getURL — safer than relative resolution and matches
+    // the URL scheme the runtime expects.
+    //
+    // **workerBlobURL: false** is the fix for the actual bug: Tesseract's
+    // default wraps the worker in a blob: URL and does
+    //   importScripts("chrome-extension://.../worker.min.js")
+    // inside that blob. Under MV3, blob-URL workers created from an
+    // extension page have origin "null" and can't importScripts a
+    // chrome-extension:// URL — that's the "failed to execute
+    // 'importScripts' on 'WorkerGlobalScope'" NetworkError. Setting this
+    // to false makes Tesseract call `new Worker(workerPath)` directly,
+    // which is same-origin and works.
+    //
+    // gzip: true matches how tessdata CDN serves eng.traineddata (as .gz).
     const worker = await window.Tesseract.createWorker("eng", 1, {
-      workerPath: scriptUrl("../dist/vendor/tesseract/worker.min.js"),
-      corePath: scriptUrl("../dist/vendor/tesseract/core/"),
+      workerPath: extUrl("dist/vendor/tesseract/worker.min.js"),
+      corePath: extUrl("dist/vendor/tesseract/core/"),
       langPath: "https://tessdata.projectnaptha.com/4.0.0",
+      workerBlobURL: false,
+      gzip: true,
       logger: (m) => {
         if (onProgress && m && typeof m.progress === "number") {
           onProgress({ phase: m.status || "ocr", pct: m.progress * 100 });

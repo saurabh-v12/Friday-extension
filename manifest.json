@@ -22,6 +22,18 @@
   "host_permissions": [
     "<all_urls>"
   ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "dist/vendor/tesseract/*",
+        "dist/vendor/tesseract/core/*",
+        "dist/vendor/tfjs/*",
+        "dist/vendor/blazeface/*",
+        "dist/vendor/transformers/*"
+      ],
+      "matches": ["<all_urls>"]
+    }
+  ],
   "content_security_policy": {
     "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self';"
   }
