@@ -8,6 +8,7 @@
 
 import { detectWebGPU, loadModel, runInferenceOnUrl, state, MAX_NEW_TOKENS } from "./model.js";
 import { MESSAGE_TYPES, sendToBackground } from "./messaging.js";
+import { loadBlazeFace, detectFacesFromDataUrl } from "./faces.js";
 
 const SAMPLE_PATH = "assets/sample-screen.png";
 const PROMPT_TEXT = "Describe this screen and list buttons and input fields";
@@ -172,10 +173,40 @@ async function onCapture() {
     const img = $("captureImg");
     img.src = data.screenshot;
     img.style.display = "block";
+    lastScreenshotDataUrl = data.screenshot;
     setStatus(`captured in ${dt.toFixed(0)}ms`);
   } catch (err) {
     log(`[capture] FAILED — ${err.message}`);
     setStatus("capture failed");
+  }
+}
+
+let lastScreenshotDataUrl = null;
+
+async function onDetectFaces() {
+  if (!lastScreenshotDataUrl) {
+    log("[faces] capture the screen first (Capture button)");
+    return;
+  }
+  setStatus("loading BlazeFace…");
+  const t0 = performance.now();
+  try {
+    const info = await loadBlazeFace({
+      onProgress: (evt) => setStatus(`BlazeFace ${evt.phase}…`),
+    });
+    log(`[faces] runtime=${info.backend} loadMs=${info.loadMs.toFixed(0)}`);
+    setStatus("running face detection…");
+    const detT0 = performance.now();
+    const faces = await detectFacesFromDataUrl(lastScreenshotDataUrl);
+    const detMs = performance.now() - detT0;
+    log(`[faces] detected=${faces.length} detectMs=${detMs.toFixed(0)} totalMs=${(performance.now() - t0).toFixed(0)}`);
+    for (const [i, f] of faces.entries()) {
+      log(`[faces.${i}] box=${f.box.x},${f.box.y} ${f.box.w}x${f.box.h} prob=${f.prob != null ? f.prob.toFixed(2) : "n/a"} landmarks=${f.landmarks.length}`);
+    }
+    setStatus(`faces detected: ${faces.length}`);
+  } catch (err) {
+    log(`[faces] FAILED — ${err && err.message ? err.message : err}`);
+    setStatus("face detection failed");
   }
 }
 
@@ -188,4 +219,5 @@ document.addEventListener("DOMContentLoaded", () => {
   $("readSettingsBtn").addEventListener("click", onReadSettings);
   $("pingContentBtn").addEventListener("click", onPingContent);
   $("captureBtn").addEventListener("click", onCapture);
+  $("facesBtn").addEventListener("click", onDetectFaces);
 });
