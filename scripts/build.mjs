@@ -78,4 +78,24 @@ await copyOne(
   "BlazeFace UMD",
 );
 
+// 4) Tesseract.js UMD + worker + WASM cores. Language data (eng.traineddata)
+//    fetches from tessdata CDN on first use and Cache Storage caches it.
+await copyOne(
+  join(NM, "tesseract.js", "dist", "tesseract.min.js"),
+  join(OUT, "tesseract", "tesseract.min.js"),
+  "Tesseract.js UMD",
+);
+await copyOne(
+  join(NM, "tesseract.js", "dist", "worker.min.js"),
+  join(OUT, "tesseract", "worker.min.js"),
+  "Tesseract.js worker",
+);
+// Copy the whole tesseract.js-core dir so any variant (plain / simd /
+// relaxed-simd / lstm) is available; runtime picks the right one.
+await copyDir(
+  join(NM, "tesseract.js-core"),
+  join(OUT, "tesseract", "core"),
+  "Tesseract.js core",
+);
+
 console.log("[build] done.");

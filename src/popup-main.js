@@ -9,6 +9,7 @@
 import { detectWebGPU, loadModel, runInferenceOnUrl, state, MAX_NEW_TOKENS } from "./model.js";
 import { MESSAGE_TYPES, sendToBackground } from "./messaging.js";
 import { loadBlazeFace, detectFacesFromDataUrl } from "./faces.js";
+import { runOcrOnDataUrl } from "./ocr.js";
 
 const SAMPLE_PATH = "assets/sample-screen.png";
 const PROMPT_TEXT = "Describe this screen and list buttons and input fields";
@@ -210,6 +211,33 @@ async function onDetectFaces() {
   }
 }
 
+async function onRunOcr() {
+  if (!lastScreenshotDataUrl) {
+    log("[ocr] capture the screen first (Capture button)");
+    return;
+  }
+  setStatus("loading Tesseract…");
+  const t0 = performance.now();
+  try {
+    const { text, words, textPii, ocrMs } = await runOcrOnDataUrl(lastScreenshotDataUrl, {
+      onProgress: (evt) => {
+        if (evt.pct != null) setStatus(`OCR ${evt.phase}… ${evt.pct.toFixed(0)}%`);
+        else setStatus(`OCR ${evt.phase}…`);
+      },
+    });
+    log(`[ocr] words=${words.length} chars=${text.length} ocrMs=${ocrMs.toFixed(0)} totalMs=${(performance.now() - t0).toFixed(0)}`);
+    log(`[ocr.pii] found=${textPii.length}`);
+    for (const hit of textPii.slice(0, 6)) {
+      const bb = hit.bbox ? `@${hit.bbox.x},${hit.bbox.y} ${hit.bbox.w}x${hit.bbox.h}` : "(fulltext)";
+      log(`[ocr.pii.hit] ${hit.kind} ${bb} evidence="${hit.evidence}" src=${hit.source}`);
+    }
+    setStatus(`OCR done: ${words.length} words, ${textPii.length} PII hit(s)`);
+  } catch (err) {
+    log(`[ocr] FAILED — ${err && err.message ? err.message : err}`);
+    setStatus("OCR failed");
+  }
+}
+
 document.addEventListener("DOMContentLoaded", () => {
   log(`[boot] dev popup — VLM opt-in lives in the side panel now`);
   setStatus("Ready.");
@@ -220,4 +248,5 @@ document.addEventListener("DOMContentLoaded", () => {
   $("pingContentBtn").addEventListener("click", onPingContent);
   $("captureBtn").addEventListener("click", onCapture);
   $("facesBtn").addEventListener("click", onDetectFaces);
+  $("ocrBtn").addEventListener("click", onRunOcr);
 });
