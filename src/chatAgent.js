@@ -163,12 +163,27 @@ async function fetchSnapshot() {
 //   {phase:'tool-result', step, name, result}
 //   {phase:'done', text, hitLimit?}
 //   {phase:'error', message}
+// Set window.__fridayVerbose = true in the DevTools console to log the
+// full round trip (system prompt, tool calls, results, final answer).
+// Off by default so a busy conversation doesn't spam the console.
+function verbose() {
+  return typeof window !== "undefined" && window.__fridayVerbose === true;
+}
+function vlog(...args) {
+  if (verbose()) console.log("[friday.chat]", ...args);
+}
+
 export async function runChatTurn({ userMessage, history = [], mode = "chat", provider, apiKey, model, onEvent }) {
   const emit = (evt) => { if (onEvent) onEvent(evt); };
   if (!provider || !apiKey) throw new Error("runChatTurn: provider + apiKey required");
   if (!supportsToolCalling(provider)) {
     throw new Error(`Tool calling isn't wired up for ${provider} yet. Switch to OpenAI or Groq for chat with page context.`);
   }
+
+  const turnT0 = performance.now();
+  vlog("── turn start ──");
+  vlog("user:", userMessage);
+  vlog("provider:", provider, "model:", model || "(default)");
 
   const snapshot = await fetchSnapshot();
   const snapOk = snapshot && !snapshot._snapshotError;
@@ -179,6 +194,11 @@ export async function runChatTurn({ userMessage, history = [], mode = "chat", pr
     elementCount: snapOk ? (snapshot.elements || []).length : 0,
     url: snapOk ? snapshot.url : null,
   });
+  if (snapOk) {
+    vlog(`snapshot: ${snapshot.url} — ${snapshot.elements.length} elements, ${snapshot.visibleText.length} chars text`);
+  } else {
+    vlog("snapshot: unavailable —", snapshot && snapshot._snapshotError);
+  }
 
   // Build the messages array. System message reflects THIS turn's
   // snapshot; history is passed through untouched.
@@ -187,6 +207,7 @@ export async function runChatTurn({ userMessage, history = [], mode = "chat", pr
     ...history,
     { role: "user", content: userMessage },
   ];
+  vlog("system prompt (first 400 chars):", messages[0].content.slice(0, 400) + "…");
 
   const toolTrace = [];
   for (let step = 1; step <= MAX_TOOL_STEPS; step++) {
@@ -216,10 +237,14 @@ export async function runChatTurn({ userMessage, history = [], mode = "chat", pr
       hasToolCalls: !!(asstMsg.tool_calls && asstMsg.tool_calls.length),
       textPreview: (asstMsg.content || "").slice(0, 160),
     });
+    vlog(`step ${step} · reply in ${latencyMs.toFixed(0)} ms · finish=${out.finishReason || "?"} · tool_calls=${(asstMsg.tool_calls || []).length}`);
+    if (asstMsg.content) vlog(`  content: ${asstMsg.content.slice(0, 200)}${asstMsg.content.length > 200 ? "…" : ""}`);
 
     // No tool calls → we have the final answer.
     if (!asstMsg.tool_calls || asstMsg.tool_calls.length === 0) {
+      const totalMs = performance.now() - turnT0;
       emit({ phase: "done", text: asstMsg.content || "", toolTrace });
+      vlog(`── turn done in ${totalMs.toFixed(0)} ms · ${toolTrace.length} tool call(s) ──`);
       return {
         text: asstMsg.content || "",
         toolTrace,
@@ -235,6 +260,7 @@ export async function runChatTurn({ userMessage, history = [], mode = "chat", pr
       try { args = JSON.parse(call.function?.arguments || "{}"); }
       catch { args = { _parseError: call.function?.arguments || "" }; }
       emit({ phase: "tool-call", step, name, args });
+      vlog(`  → tool: ${name}(${JSON.stringify(args)})`);
       let result;
       try {
         result = await sendToBackground(MESSAGE_TYPES.EXEC_TOOL, { tool: name, args });
@@ -242,6 +268,7 @@ export async function runChatTurn({ userMessage, history = [], mode = "chat", pr
         result = { ok: false, error: err.message || String(err) };
       }
       emit({ phase: "tool-result", step, name, result });
+      vlog(`  ← result: ${JSON.stringify(result).slice(0, 200)}`);
       toolTrace.push({ step, name, args, result });
       // Truncate huge results so we don't blow the context window.
       let content = result;
@@ -256,7 +283,9 @@ export async function runChatTurn({ userMessage, history = [], mode = "chat", pr
     }
   }
 
+  const totalMs = performance.now() - turnT0;
   emit({ phase: "done", text: "(reached tool step limit — try 'New chat' or refine the question.)", toolTrace, hitLimit: true });
+  vlog(`── turn HIT LIMIT after ${totalMs.toFixed(0)} ms · ${toolTrace.length} tool calls ──`);
   return {
     text: "(Reached the tool step limit — try 'New chat' or refine the question.)",
     toolTrace,

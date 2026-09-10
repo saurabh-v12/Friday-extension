@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Friday — Chat + Tool-calling Test Page</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <style>
+      body {
+        font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        padding: 30px;
+        max-width: 720px;
+        color: #111;
+      }
+      h1 { font-size: 20px; margin-bottom: 4px; }
+      h2 { font-size: 15px; margin: 22px 0 8px; }
+      .note { color: #666; font-size: 13px; margin-bottom: 24px; }
+      p { line-height: 1.5; }
+      form {
+        border: 1px solid #d0d0d5;
+        border-radius: 10px;
+        padding: 20px;
+        margin-bottom: 20px;
+        max-width: 340px;
+      }
+      label { display: block; font-size: 12px; color: #666; margin-bottom: 4px; }
+      input {
+        width: 100%;
+        padding: 8px 10px;
+        font: inherit;
+        border: 1px solid #d0d0d5;
+        border-radius: 6px;
+        margin-bottom: 12px;
+      }
+      input:focus-visible { outline: 2px solid #ff2e63; }
+      button {
+        font: inherit;
+        padding: 8px 16px;
+        border: none;
+        border-radius: 6px;
+        background: #111;
+        color: white;
+        cursor: pointer;
+      }
+      button.hit { background: #1a7f4c; }
+      #trace {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 12px;
+        background: #f7f7f8;
+        border: 1px solid #ececf0;
+        border-radius: 6px;
+        padding: 10px 12px;
+        min-height: 60px;
+        white-space: pre-wrap;
+        color: #555;
+      }
+      .badge {
+        display: inline-block;
+        padding: 1px 6px;
+        border-radius: 3px;
+        background: #ffe6ee;
+        color: #ff2e63;
+        font-size: 11px;
+        font-weight: 600;
+        margin-left: 6px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Friday chat + tool-calling test page</h1>
+    <p class="note">
+      Open the Friday side panel while this page is the active tab. Switch
+      the header toggle to <b>Cloud</b>, pick <b>OpenAI</b> or <b>Groq</b>
+      as the provider in Settings, and try these three prompts in order.
+      Each executed tool call flips a <span class="badge">hit</span> below.
+    </p>
+
+    <h2>Scenario 1 — "What's on this page?"</h2>
+    <p>
+      Expected: Friday describes this form. The system prompt in the
+      chat agent carries the compact snapshot (URL, title, visible text,
+      elements) so the model should answer from that without any tool
+      calls. It might optionally call <code>getSnapshot</code> or
+      <code>readText</code>.
+    </p>
+
+    <h2>Scenario 2 — "Click the login button."</h2>
+    <p>
+      Expected: one <code>click</code> tool call targeting the button
+      below, which flips green and appends "clicked login" to the trace.
+    </p>
+
+    <h2>Scenario 3 — "Fill the email field with test@ex.com."</h2>
+    <p>
+      Expected: one <code>type</code> tool call targeting the email
+      input below with text <code>test@ex.com</code>. The field turns
+      green and the trace records the typed value.
+    </p>
+
+    <form id="loginForm">
+      <label for="email">Email</label>
+      <input id="email" name="email" type="email" placeholder="you@example.com" autocomplete="email" />
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" />
+      <button id="loginBtn" type="submit">Login</button>
+    </form>
+
+    <h2>Ground-truth trace</h2>
+    <pre id="trace">(no interactions yet — waiting for Friday to act)</pre>
+
+    <script>
+      // Track hits + typed values so verification is trivial.
+      const trace = document.getElementById("trace");
+      const events = [];
+      function record(evt) {
+        events.push(`${new Date().toISOString().slice(11, 19)}  ${evt}`);
+        trace.textContent = events.join("\n");
+      }
+      window.__fridayHits = new Set();
+      window.__fridayTyped = new Map();
+      document.getElementById("loginBtn").addEventListener("click", (e) => {
+        e.preventDefault();
+        window.__fridayHits.add("loginBtn");
+        e.target.classList.add("hit");
+        record("clicked #loginBtn");
+      });
+      for (const id of ["email", "password"]) {
+        const el = document.getElementById(id);
+        el.addEventListener("input", () => {
+          window.__fridayTyped.set(id, el.value);
+          el.style.background = "#d7f5db";
+          record(`typed into #${id}: ${JSON.stringify(el.value)}`);
+        });
+      }
+    </script>
+  </body>
+</html>
