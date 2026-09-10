@@ -778,6 +778,22 @@ body {
   padding: 6px 12px;
   background: var(--bg-soft);
   border-style: dashed;
+  position: relative;
+}
+.trace-step.trace-step--observing::before {
+  content: "";
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-right: 8px;
+  border: 2px solid var(--accent);
+  border-top-color: transparent;
+  border-radius: 50%;
+  vertical-align: -1px;
+  animation: fridaySpin 700ms linear infinite;
+}
+@keyframes fridaySpin {
+  to { transform: rotate(360deg); }
 }
 
 .run-final {

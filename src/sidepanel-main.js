@@ -221,8 +221,19 @@ async function onSubmitComposer(e) {
     );
     return;
   }
+  // Warn when picking local without VLM enabled — router will still call
+  // the local branch, which will attempt to download the VLM on the fly.
+  if (source === "local" && !settings.vlmEnabled) {
+    openRunView(task);
+    appendTraceRow(
+      `<div class="trace-step-body"><div class="trace-step-title">On-Device mode without VLM.</div><div class="trace-step-meta">Enable "Local VLM (optional)" in Settings, or switch the header toggle to Cloud (BYOK) — otherwise the router has no reasoning source.</div></div>`,
+      "trace-step--error",
+    );
+    return;
+  }
 
   agentInFlight = true;
+  setComposerBusy(true);
   openRunView(task);
   let currentObserveDiv = null;
   try {
@@ -293,10 +304,37 @@ async function onSubmitComposer(e) {
     const finalEl = $("runFinal");
     finalEl.hidden = false;
     finalEl.classList.add("run-final--error");
-    finalEl.textContent = err && err.message ? err.message : String(err);
+    const raw = err && err.message ? err.message : String(err);
+    finalEl.textContent = friendlyError(raw);
   } finally {
     agentInFlight = false;
+    setComposerBusy(false);
   }
+}
+
+function setComposerBusy(busy) {
+  const sendBtn = $("sendBtn");
+  const input = $("composerInput");
+  if (sendBtn) sendBtn.disabled = busy;
+  if (input) input.disabled = busy;
+}
+
+// Turn low-level errors into something a user can act on.
+function friendlyError(msg) {
+  if (!msg) return "Unknown error.";
+  if (/http\(s\) only/i.test(msg)) {
+    return "This page can't be inspected (chrome:// or extension pages are locked out by the browser). Open a normal website tab and try again.";
+  }
+  if (/no active tab/i.test(msg)) {
+    return "No active browser tab. Click into a website tab, then re-run the task.";
+  }
+  if (/api key/i.test(msg)) {
+    return "Cloud API key issue. Open Settings and paste a valid key for your chosen provider.";
+  }
+  if (/MCP/i.test(msg)) {
+    return `${msg} — check Settings → MCP servers.`;
+  }
+  return msg;
 }
 
 function wireComposer() {
@@ -499,8 +537,9 @@ async function runScan() {
     const msg = err && err.message ? err.message : String(err);
     console.error("[friday.sidepanel] scan failed:", err);
     // Show error inline on the empty-state so the user isn't lost.
-    if (scanBtn) scanBtn.textContent = `Scan failed — ${msg.slice(0, 40)}`;
-    setTimeout(() => { if (scanBtn) scanBtn.textContent = "Run privacy scan"; }, 4000);
+    const short = friendlyError(msg).slice(0, 80);
+    if (scanBtn) scanBtn.textContent = `Scan failed — ${short}`;
+    setTimeout(() => { if (scanBtn) scanBtn.textContent = "Run privacy scan"; }, 5000);
   } finally {
     scanInFlight = false;
     if (scanBtn) { scanBtn.disabled = false; if (!scanBtn.textContent.startsWith("Scan failed")) scanBtn.textContent = "Run privacy scan"; }

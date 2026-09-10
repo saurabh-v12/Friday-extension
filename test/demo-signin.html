@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Acme — Sign in (Friday demo, Task F.1)</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <style>
+      :root {
+        --bg: #f4f5f8;
+        --card: #ffffff;
+        --text: #111114;
+        --muted: #6a6a72;
+        --border: #e4e4e9;
+        --accent: #ff2e63;
+      }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; padding: 0; background: var(--bg); font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: var(--text); }
+      .wrap { min-height: 100vh; display: grid; place-items: center; padding: 40px 20px; }
+      .card {
+        background: var(--card);
+        width: 100%;
+        max-width: 420px;
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        padding: 28px;
+        box-shadow: 0 1px 3px rgba(17, 17, 20, 0.06);
+      }
+      .brand { display: flex; align-items: center; gap: 8px; margin-bottom: 20px; }
+      .brand-mark {
+        width: 26px; height: 26px; border-radius: 8px; display: inline-flex; align-items: center; justify-content: center;
+        background: linear-gradient(135deg, #ff2e63, #ff6b8b); color: white; font-weight: 700; font-size: 13px;
+      }
+      h1 { font-size: 20px; margin: 0 0 4px; }
+      .subtitle { color: var(--muted); font-size: 13px; margin: 0 0 20px; }
+
+      .avatar-row { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; padding: 12px; background: #f7f7f8; border-radius: 12px; }
+      .avatar-row img { width: 44px; height: 44px; border-radius: 50%; object-fit: cover; }
+      .avatar-info { flex: 1; min-width: 0; }
+      .avatar-info b { font-size: 13px; display: block; }
+      .avatar-info small { color: var(--muted); font-size: 12px; word-break: break-all; }
+
+      .field { margin-bottom: 14px; }
+      .field label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+      .field input {
+        width: 100%; padding: 10px 12px; font: inherit;
+        background: #fbfbfd; border: 1px solid var(--border); border-radius: 10px;
+      }
+      .field input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+      .btn-primary {
+        width: 100%; padding: 12px; margin-top: 8px;
+        font: inherit; font-weight: 600; color: white; background: #111114;
+        border: none; border-radius: 10px; cursor: pointer;
+        transition: opacity 120ms ease;
+      }
+      .btn-primary:hover { opacity: 0.92; }
+
+      .fine-print { margin-top: 16px; color: var(--muted); font-size: 11px; text-align: center; }
+      .fine-print .contact { display: block; margin-top: 4px; }
+
+      .demo-note {
+        max-width: 420px;
+        margin: 20px auto 0;
+        padding: 12px 14px;
+        background: #fff5f8;
+        border: 1px dashed var(--accent);
+        border-radius: 10px;
+        color: #a01945;
+        font-size: 12px;
+        line-height: 1.4;
+      }
+      .demo-note code { background: white; padding: 1px 4px; border-radius: 3px; }
+
+      .success { color: #1a7f4c; font-weight: 600; margin-top: 12px; text-align: center; display: none; }
+      .success.on { display: block; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div>
+        <div class="card">
+          <div class="brand">
+            <span class="brand-mark">A</span>
+            <b>Acme</b>
+          </div>
+          <h1>Welcome back</h1>
+          <p class="subtitle">Sign in to continue to your dashboard.</p>
+
+          <div class="avatar-row">
+            <!-- Inline SVG "face" gives BlazeFace an unambiguous target
+                 without a network fetch — deliberate: works offline. -->
+            <img id="avatar" alt="Last used account"
+              src="data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='50' fill='%23f5b5c5'/%3E%3Ccircle cx='50' cy='40' r='18' fill='%23fddebc'/%3E%3Cpath d='M20 100 c 0 -22 15 -35 30 -35 s 30 13 30 35 z' fill='%23fddebc'/%3E%3Ccircle cx='42' cy='38' r='2.5' fill='%23111'/%3E%3Ccircle cx='58' cy='38' r='2.5' fill='%23111'/%3E%3Cpath d='M42 48 q 8 6 16 0' stroke='%23111' stroke-width='2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E" />
+            <div class="avatar-info">
+              <b>Jane Doe</b>
+              <small>jane.doe@acme.example.com</small>
+            </div>
+          </div>
+
+          <form id="signInForm">
+            <div class="field">
+              <label for="email">Email</label>
+              <input id="email" name="email" type="email" autocomplete="email" placeholder="you@example.com" />
+            </div>
+            <div class="field">
+              <label for="password">Password</label>
+              <input id="password" name="password" type="password" autocomplete="current-password" placeholder="Enter your password" />
+            </div>
+            <div class="field">
+              <label for="phone">Mobile (for 2FA)</label>
+              <input id="phone" name="phone" type="tel" autocomplete="tel" placeholder="+91 9876543210" />
+            </div>
+            <button class="btn-primary" type="submit">Sign in</button>
+            <div class="success" id="success">✓ Signed in — Friday demo complete.</div>
+          </form>
+
+          <div class="fine-print">
+            By continuing you agree to our terms.
+            <span class="contact">Support: support@acme.example.com · +1 (555) 010-5309</span>
+          </div>
+        </div>
+
+        <div class="demo-note">
+          <b>Friday demo (Task F.1).</b>
+          Open the Friday side panel, click <code>Run privacy scan</code> to see
+          the receipt (avatar face + email + password + phone should all be
+          redacted). Then type into the composer:
+          <code>Sign in with jane.doe@acme.example.com and password Sup3rSecret</code>
+          — the agent will type both fields (values scrubbed before any cloud
+          call) and click Sign in.
+        </div>
+      </div>
+    </div>
+
+    <script>
+      // Prevent real form submission — just show "signed in" so the demo
+      // stays on the same page for easy inspection.
+      document.getElementById("signInForm").addEventListener("submit", (e) => {
+        e.preventDefault();
+        document.getElementById("success").classList.add("on");
+      });
+    </script>
+  </body>
+</html>
