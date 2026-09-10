@@ -137,6 +137,7 @@ function openSettings() {
   renderDeviceToggle();
   renderVlmToggle();
   renderByok();
+  renderMcp();
 }
 function closeSettings() {
   $("settingsView").hidden = true;
@@ -233,6 +234,7 @@ async function onSubmitComposer(e) {
         apiKey: settings.byokApiKey,
         model: settings.byokModel,
       } : {},
+      mcpServers: parseMcpServers(),
       maxSteps: DEFAULT_MAX_STEPS,
       onStep: (evt) => {
         if (evt.phase === "observe") {
@@ -248,6 +250,7 @@ async function onSubmitComposer(e) {
             a.type === "click" ? `Click <code>${escapeHtml(a.fid || "?")}</code>` :
             a.type === "type" ? `Type into <code>${escapeHtml(a.fid || "?")}</code>` :
             a.type === "scroll" ? `Scroll to <code>${escapeHtml(a.fid || "?")}</code>` :
+            a.type === "mcp" ? `Call MCP <code>${escapeHtml(a.server || "?")}.${escapeHtml(a.tool || "?")}</code>` :
             a.type === "say" ? "Reply" :
             a.type === "stop" ? "Task complete" : (a.type || "?");
           const meta = [
@@ -633,6 +636,56 @@ function wireByok() {
   $("byokSaveBtn").addEventListener("click", onByokSave);
 }
 
+// ─── MCP servers ─────────────────────────────────────────────────────
+
+function parseMcpServers() {
+  try {
+    const arr = JSON.parse(settings.mcpServers || "[]");
+    return Array.isArray(arr) ? arr : [];
+  } catch { return []; }
+}
+
+function renderMcp() {
+  const input = $("mcpServersInput");
+  const status = $("mcpStatus");
+  if (!input) return;
+  input.value = settings.mcpServers || "[]";
+  const arr = parseMcpServers();
+  if (arr.length === 0) {
+    status.textContent = "No servers configured.";
+    status.classList.remove("byok-status--set");
+  } else {
+    status.textContent = `${arr.length} server(s) configured.`;
+    status.classList.add("byok-status--set");
+  }
+}
+
+async function onMcpSave() {
+  const input = $("mcpServersInput");
+  const status = $("mcpStatus");
+  let value = (input.value || "[]").trim();
+  try {
+    const arr = JSON.parse(value);
+    if (!Array.isArray(arr)) throw new Error("must be a JSON array");
+    // Normalise — ensure required fields.
+    for (const s of arr) {
+      if (!s.url) throw new Error("each server needs a url");
+    }
+    value = JSON.stringify(arr, null, 2);
+    await saveSetting("mcpServers", value);
+    input.value = value;
+    renderMcp();
+  } catch (err) {
+    status.textContent = `Parse error: ${err.message}`;
+    status.classList.remove("byok-status--set");
+  }
+}
+
+function wireMcp() {
+  const btn = $("mcpSaveBtn");
+  if (btn) btn.addEventListener("click", onMcpSave);
+}
+
 // ─── Boot ─────────────────────────────────────────────────────────────
 
 document.addEventListener("DOMContentLoaded", async () => {
@@ -644,6 +697,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   wireSettings();
   wireVlm();
   wireByok();
+  wireMcp();
   wireReceipt();
   wireComposer();
   wireVoice();

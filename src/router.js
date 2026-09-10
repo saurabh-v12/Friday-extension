@@ -22,9 +22,9 @@ export const SOURCES = Object.freeze({ LOCAL: "local", BYOK: "byok" });
 // Public dispatch. `source` is one of SOURCES; `config` is source-specific:
 //   local: {}
 //   byok:  {provider, apiKey, model}
-export async function route({ task, payload, source, config }) {
-  if (source === SOURCES.LOCAL) return routeLocal({ task, payload, config });
-  if (source === SOURCES.BYOK) return routeByok({ task, payload, config });
+export async function route({ task, payload, source, config, mcpTools }) {
+  if (source === SOURCES.LOCAL) return routeLocal({ task, payload, config, mcpTools });
+  if (source === SOURCES.BYOK) return routeByok({ task, payload, config, mcpTools });
   throw new Error(`route: unknown source "${source}"`);
 }
 
@@ -35,11 +35,11 @@ export async function route({ task, payload, source, config }) {
 // we ask for a short structured answer, then try to parse a JSON action;
 // on parse failure we return `{type:'say'}` with the raw text.
 
-async function routeLocal({ task, payload }) {
+async function routeLocal({ task, payload, mcpTools }) {
   if (!modelState.model) {
     await loadModel({ preferWebGPU: true });
   }
-  const prompt = buildPrompt(task, payload);
+  const prompt = buildPrompt(task, payload, { mcpTools });
   const t0 = performance.now();
   const { output, inferMs } = await runInferenceOnUrl(payload.image.dataUrl, prompt);
   const totalMs = performance.now() - t0;
@@ -54,7 +54,7 @@ async function routeLocal({ task, payload }) {
 
 // ─── BYOK cloud (Task 4.3 wires the settings/UI; router just calls it) ─
 
-async function routeByok({ task, payload, config }) {
+async function routeByok({ task, payload, config, mcpTools }) {
   if (!config || !config.apiKey) {
     throw new Error("BYOK: no API key set (open Settings → Cloud API key)");
   }
@@ -64,7 +64,7 @@ async function routeByok({ task, payload, config }) {
     provider: config.provider,
     apiKey: config.apiKey,
     model: config.model,
-    prompt: buildPrompt(task, payload),
+    prompt: buildPrompt(task, payload, { mcpTools }),
     imageDataUrl: payload.image.dataUrl,
   });
   const latencyMs = performance.now() - t0;
@@ -81,7 +81,7 @@ async function routeByok({ task, payload, config }) {
 
 // Small, structured prompt. Even a weak model tends to output the JSON
 // block when we show the exact schema and give it a concrete example.
-export function buildPrompt(task, payload) {
+export function buildPrompt(task, payload, opts = {}) {
   const elements = (payload.elements || [])
     .filter((e) => e.visible !== false)
     .slice(0, 60)
@@ -94,16 +94,39 @@ export function buildPrompt(task, payload) {
     .join("\n");
 
   const page = payload.page || {};
+  const mcpTools = opts.mcpTools || [];
+  const hasMcp = mcpTools.length > 0;
+  const mcpBlock = hasMcp
+    ? [
+        "",
+        "External tools you may call (MCP). Prefer DOM actions when possible;",
+        'use tools only for off-page work. For a tool action, reply with',
+        '{"action":"mcp","server":"...","tool":"...","args":{...},"reasoning":"..."}.',
+        'Args are ALWAYS PII-scrubbed on the client before send.',
+        "",
+        "Tools:",
+        mcpTools.slice(0, 20).map((t) => {
+          const schema = t.tool.inputSchema ? JSON.stringify(t.tool.inputSchema).slice(0, 120) : "{}";
+          return `- server=${t.server} tool=${t.tool.name} desc="${(t.tool.description || "").slice(0, 80)}" schema=${schema}`;
+        }).join("\n"),
+      ].join("\n")
+    : "";
+
+  const schema = hasMcp
+    ? '  {"action":"click|type|scroll|mcp|stop|say", "fid":"f-N", "text":"...", "server":"...", "tool":"...", "args":{...}, "reasoning":"..."}'
+    : '  {"action":"click|type|scroll|stop|say", "fid":"f-N", "text":"...", "reasoning":"..."}';
+
   return [
     "You are Friday, an on-device web agent. Given a redacted screenshot and",
     "a list of interactive DOM elements (with stable fids), decide the SINGLE",
     "next action to move toward the user's goal. Reply ONLY with a JSON",
     "object matching this schema:",
     "",
-    '  {"action":"click|type|scroll|stop|say", "fid":"f-N", "text":"...", "reasoning":"..."}',
+    schema,
     "",
     'Use "stop" when the task is complete or you cannot proceed.',
     'Use "say" only when you need to speak to the user without touching the page.',
+    mcpBlock,
     "",
     `Page: ${page.host || ""}${page.path || ""}  —  ${page.title || ""}`,
     "",
@@ -138,13 +161,18 @@ export function parseAction(text) {
   catch { return sayFallback(text); }
 
   const type = String(obj.action || obj.type || "").toLowerCase();
-  if (!["click", "type", "scroll", "stop", "say"].includes(type)) return sayFallback(text);
+  if (!["click", "type", "scroll", "mcp", "stop", "say"].includes(type)) return sayFallback(text);
 
   const out = { type };
   if (obj.fid) out.fid = String(obj.fid);
   if (obj.text) out.text = String(obj.text);
   if (obj.reasoning) out.reasoning = String(obj.reasoning);
   if (typeof obj.confidence === "number") out.confidence = obj.confidence;
+  if (type === "mcp") {
+    out.server = obj.server ? String(obj.server) : "";
+    out.tool = obj.tool ? String(obj.tool) : "";
+    out.args = obj.args && typeof obj.args === "object" ? obj.args : {};
+  }
   return out;
 }
 

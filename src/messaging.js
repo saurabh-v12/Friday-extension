@@ -37,6 +37,7 @@ export const SETTING_KEYS = Object.freeze([
   "byokProvider",     // 'gemini' | 'openai' | 'groq'
   "byokApiKey",       // string — stored in chrome.storage.local (device-scoped)
   "byokModel",        // string — provider-specific model id
+  "mcpServers",       // JSON string — array of {name, url, headers?, enabled?}
 ]);
 
 export const SETTING_DEFAULTS = Object.freeze({
@@ -47,6 +48,7 @@ export const SETTING_DEFAULTS = Object.freeze({
   byokProvider: "gemini",
   byokApiKey: "",
   byokModel: "",
+  mcpServers: "[]",
 });
 
 function newRequestId() {

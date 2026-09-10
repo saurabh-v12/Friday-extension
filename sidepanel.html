@@ -183,6 +183,25 @@
             </div>
           </li>
 
+          <li class="settings-row settings-row--stacked" id="mcpRow">
+            <div class="settings-row-head">
+              <div>
+                <div class="settings-row-label">MCP servers</div>
+                <div class="settings-row-hint">
+                  JSON array of <code>{name, url, headers?, enabled?}</code>.
+                  Tool args are PII-scrubbed before send. HTTP transport only.
+                </div>
+              </div>
+            </div>
+            <div class="settings-row-body">
+              <textarea id="mcpServersInput" class="text-input" rows="4" spellcheck="false" placeholder='[{"name":"gmail","url":"https://.../mcp","headers":{"Authorization":"Bearer …"}}]'></textarea>
+              <div class="byok-actions">
+                <span class="byok-status" id="mcpStatus">No servers configured.</span>
+                <button class="btn-primary" id="mcpSaveBtn" type="button">Save</button>
+              </div>
+            </div>
+          </li>
+
           <li class="settings-row settings-row--stacked" id="vlmRow">
             <div class="settings-row-head">
               <div>
