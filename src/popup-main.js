@@ -10,6 +10,7 @@ import { detectWebGPU, loadModel, runInferenceOnUrl, state, MAX_NEW_TOKENS } fro
 import { MESSAGE_TYPES, sendToBackground } from "./messaging.js";
 import { loadBlazeFace, detectFacesFromDataUrl } from "./faces.js";
 import { runOcrOnDataUrl } from "./ocr.js";
+import { redactImage, collectRegions, REDACT_MODES } from "./redact.js";
 
 const SAMPLE_PATH = "assets/sample-screen.png";
 const PROMPT_TEXT = "Describe this screen and list buttons and input fields";
@@ -175,6 +176,7 @@ async function onCapture() {
     img.src = data.screenshot;
     img.style.display = "block";
     lastScreenshotDataUrl = data.screenshot;
+    lastCapture = data;
     setStatus(`captured in ${dt.toFixed(0)}ms`);
   } catch (err) {
     log(`[capture] FAILED — ${err.message}`);
@@ -183,6 +185,7 @@ async function onCapture() {
 }
 
 let lastScreenshotDataUrl = null;
+let lastCapture = null;
 
 async function onDetectFaces() {
   if (!lastScreenshotDataUrl) {
@@ -208,6 +211,51 @@ async function onDetectFaces() {
   } catch (err) {
     log(`[faces] FAILED — ${err && err.message ? err.message : err}`);
     setStatus("face detection failed");
+  }
+}
+
+async function onRedact() {
+  if (!lastCapture) { log("[redact] capture the screen first"); return; }
+  setStatus("running detectors + redaction…");
+  const t0 = performance.now();
+  try {
+    // Decode the screenshot once, then read its true pixel dimensions so
+    // we can scale DOM bboxes (CSS px) to image space accurately.
+    const img = new Image();
+    await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = lastScreenshotDataUrl; });
+    const imageWidth = img.naturalWidth;
+    const imageHeight = img.naturalHeight;
+
+    log("[redact] loading BlazeFace + Tesseract…");
+    const [faceInfo, ocrOut] = await Promise.all([
+      loadBlazeFace().then((info) => detectFacesFromDataUrl(lastScreenshotDataUrl).then((faces) => ({ ...info, faces }))),
+      runOcrOnDataUrl(lastScreenshotDataUrl),
+    ]);
+    log(`[redact] faces=${faceInfo.faces.length} ocr.words=${ocrOut.words.length} ocr.pii=${ocrOut.textPii.length}`);
+
+    const regions = collectRegions({
+      dom: lastCapture.pii,
+      faces: faceInfo.faces,
+      ocr: ocrOut,
+      viewport: lastCapture.viewport,
+      imageWidth,
+      imageHeight,
+    });
+    log(`[redact] regions=${regions.length} (dom=${(lastCapture.pii && lastCapture.pii.total) || 0} faces=${faceInfo.faces.length} ocr=${ocrOut.textPii.filter(h => h.bbox).length})`);
+
+    const result = await redactImage({
+      imageSource: img,
+      regions,
+      mode: REDACT_MODES.BLUR,
+      blurPx: 22,
+    });
+    log(`[redact] applied=${result.regionsApplied}/${result.regionsGiven} redactMs=${result.redactMs.toFixed(0)} totalMs=${(performance.now() - t0).toFixed(0)}`);
+
+    $("captureImg").src = result.dataUrl;
+    setStatus(`redacted ${result.regionsApplied} region(s)`);
+  } catch (err) {
+    log(`[redact] FAILED — ${err && err.message ? err.message : err}`);
+    setStatus("redact failed");
   }
 }
 
@@ -249,4 +297,5 @@ document.addEventListener("DOMContentLoaded", () => {
   $("captureBtn").addEventListener("click", onCapture);
   $("facesBtn").addEventListener("click", onDetectFaces);
   $("ocrBtn").addEventListener("click", onRunOcr);
+  $("redactBtn").addEventListener("click", onRedact);
 });
