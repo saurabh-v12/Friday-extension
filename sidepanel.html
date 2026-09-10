@@ -101,6 +101,27 @@
             </div>
             <div class="settings-row-value" id="settingsDeviceValue">—</div>
           </li>
+          <li class="settings-row settings-row--stacked" id="vlmRow">
+            <div class="settings-row-head">
+              <div>
+                <div class="settings-row-label">Local VLM (optional)</div>
+                <div class="settings-row-hint">
+                  Deferred as a fallback — proven correct but slow on typical
+                  hardware (see gate 0.7). Enable only if you have a strong GPU.
+                </div>
+              </div>
+              <label class="switch" aria-label="Enable local VLM">
+                <input id="vlmToggle" type="checkbox" />
+                <span class="switch-slider" aria-hidden="true"></span>
+              </label>
+            </div>
+            <div class="settings-row-body" id="vlmBody" hidden>
+              <div class="vlm-status" id="vlmStatus">Not downloaded yet.</div>
+              <progress id="vlmProgress" value="0" max="100" hidden></progress>
+              <button class="btn-primary" id="vlmDownloadBtn" type="button">Download local VLM</button>
+            </div>
+          </li>
+
           <li class="settings-row settings-row--muted">
             More settings coming soon.
           </li>

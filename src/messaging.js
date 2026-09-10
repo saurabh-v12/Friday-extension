@@ -26,11 +26,13 @@ export const MESSAGE_TYPES = Object.freeze({
 export const SETTING_KEYS = Object.freeze([
   "mode",          // 'chat' | 'agent'
   "onDeviceOnly",  // boolean — Cloud vs On-Device toggle
+  "vlmEnabled",    // boolean — opt-in local VLM (deferred per gate 0.7)
 ]);
 
 export const SETTING_DEFAULTS = Object.freeze({
   mode: "chat",
   onDeviceOnly: true,
+  vlmEnabled: false,
 });
 
 function newRequestId() {

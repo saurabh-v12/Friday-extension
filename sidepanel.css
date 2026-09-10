@@ -285,6 +285,94 @@ body {
   border-style: dashed;
 }
 
+/* Stacked row: header + expandable body (for the VLM opt-in card). */
+.settings-row--stacked {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+}
+.settings-row-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.settings-row-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.settings-row-body[hidden] { display: none; }
+.vlm-status {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+#vlmProgress {
+  width: 100%;
+  height: 6px;
+  border: none;
+  background: var(--bg-soft);
+  border-radius: 999px;
+  overflow: hidden;
+}
+#vlmProgress::-webkit-progress-bar { background: var(--bg-soft); border-radius: 999px; }
+#vlmProgress::-webkit-progress-value { background: var(--accent); border-radius: 999px; }
+
+.btn-primary {
+  align-self: flex-start;
+  padding: 6px 12px;
+  border: none;
+  border-radius: 999px;
+  background: var(--send-bg);
+  color: var(--send-fg);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 120ms ease;
+}
+.btn-primary:hover { opacity: 0.92; }
+.btn-primary:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* Small toggle switch used by the VLM opt-in row. */
+.switch {
+  position: relative;
+  display: inline-block;
+  width: 34px;
+  height: 20px;
+  flex-shrink: 0;
+}
+.switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+.switch-slider {
+  position: absolute;
+  inset: 0;
+  background: var(--border-strong);
+  border-radius: 999px;
+  transition: background 140ms ease;
+}
+.switch-slider::before {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  background: #fff;
+  border-radius: 50%;
+  transition: transform 160ms ease;
+  box-shadow: var(--shadow-soft);
+}
+.switch input:checked + .switch-slider {
+  background: var(--accent);
+}
+.switch input:checked + .switch-slider::before {
+  transform: translateX(14px);
+}
+
 .spark {
   display: inline-flex;
   padding: 4px;

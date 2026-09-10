@@ -1,15 +1,21 @@
 // Friday side panel entry.
 // Task 1.3: wire header controls to settings + persistence via BG messaging.
+// Task 1.6: optional local-VLM opt-in inside settings, with first-run
+//           download + progress bar and cache-reuse on subsequent loads.
 //
 // - Chat/Agent pill        → dropdown menu, updates label, persists `mode`.
 // - Cloud/On-Device toggle → flips `data-on-device`, persists `onDeviceOnly`.
 // - Settings gear          → swaps the body from empty-state → settings view.
+// - VLM opt-in (settings)  → persists `vlmEnabled`; reveals a Download button
+//                            that runs the shared loader (src/model.js) and
+//                            shows real progress; second click reports cached.
 
 import {
   MESSAGE_TYPES,
   SETTING_DEFAULTS,
   sendToBackground,
 } from "./messaging.js";
+import { loadModel, detectWebGPU, state as modelState } from "./model.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -112,6 +118,7 @@ function openSettings() {
   $("settingsView").hidden = false;
   renderMode();
   renderDeviceToggle();
+  renderVlmToggle();
 }
 function closeSettings() {
   $("settingsView").hidden = true;
@@ -126,6 +133,77 @@ function wireSettings() {
   });
 }
 
+// ─── VLM opt-in + first-run download ─────────────────────────────────
+
+function renderVlmToggle() {
+  const enabled = !!settings.vlmEnabled;
+  const cb = $("vlmToggle");
+  if (cb) cb.checked = enabled;
+  const body = $("vlmBody");
+  if (body) body.hidden = !enabled;
+  updateVlmStatusLine();
+}
+
+function updateVlmStatusLine() {
+  const status = $("vlmStatus");
+  if (!status) return;
+  if (modelState.model) {
+    const mb = (modelState.downloadedBytes / 1024 / 1024).toFixed(1);
+    const cacheState = modelState.downloadedBytes === 0 ? "cached (no download)" : `downloaded ${mb} MB`;
+    status.textContent = `Loaded on ${modelState.backend} in ${(modelState.loadMs / 1000).toFixed(1)}s (${cacheState}).`;
+    $("vlmDownloadBtn").textContent = "Reload";
+  } else if (!settings.vlmEnabled) {
+    status.textContent = "Disabled.";
+  } else {
+    status.textContent = "Not downloaded yet.";
+  }
+}
+
+async function onVlmToggleChange(e) {
+  const enabled = !!e.target.checked;
+  await saveSetting("vlmEnabled", enabled);
+  renderVlmToggle();
+}
+
+async function onVlmDownload() {
+  const btn = $("vlmDownloadBtn");
+  const bar = $("vlmProgress");
+  const status = $("vlmStatus");
+  btn.disabled = true;
+  bar.hidden = false;
+  bar.value = 0;
+  status.textContent = "Checking WebGPU…";
+
+  const gpu = await detectWebGPU();
+  status.textContent = gpu.available
+    ? `WebGPU ready (${gpu.vendor}/${gpu.architecture}). Loading model…`
+    : `WebGPU unavailable — using WASM. Loading model…`;
+
+  try {
+    await loadModel({
+      preferWebGPU: gpu.available,
+      onProgress: (evt) => {
+        if (evt.total > 0) {
+          bar.value = evt.pct;
+          status.textContent = `Downloading… ${evt.mbLoaded.toFixed(1)} / ${evt.mbTotal.toFixed(1)} MB (${evt.pct.toFixed(0)}%)`;
+        }
+      },
+    });
+    bar.value = 100;
+    updateVlmStatusLine();
+  } catch (err) {
+    status.textContent = `Load failed — ${err && err.message ? err.message : err}`;
+  } finally {
+    btn.disabled = false;
+    setTimeout(() => { bar.hidden = true; }, 800);
+  }
+}
+
+function wireVlm() {
+  $("vlmToggle").addEventListener("change", onVlmToggleChange);
+  $("vlmDownloadBtn").addEventListener("click", onVlmDownload);
+}
+
 // ─── Boot ─────────────────────────────────────────────────────────────
 
 document.addEventListener("DOMContentLoaded", async () => {
@@ -135,4 +213,5 @@ document.addEventListener("DOMContentLoaded", async () => {
   wireModePill();
   wireDeviceToggle();
   wireSettings();
+  wireVlm();
 });
