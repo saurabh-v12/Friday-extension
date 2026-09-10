@@ -464,6 +464,9 @@ function friendlyError(msg) {
   if (/api key/i.test(msg)) {
     return "Cloud API key issue. Open Settings and paste a valid key for your chosen provider.";
   }
+  if (/tool[-_ ]?call(ing|s)?\b/i.test(msg) && /not support/i.test(msg)) {
+    return "This model doesn't support tool calling. Pick a tool-capable model in Settings (e.g. Groq: llama-3.3-70b-versatile, OpenAI: gpt-4o-mini).";
+  }
   if (/MCP/i.test(msg)) {
     return `${msg} — check Settings → MCP servers.`;
   }
@@ -758,22 +761,19 @@ function wireVlm() {
 
 // ─── BYOK (Cloud API key) ─────────────────────────────────────────────
 //
-// Model picker fetches the LIVE model list from each provider's /models
-// endpoint whenever a key is present. Hardcoded fallbacks (KNOWN_MODELS)
-// only show up before the user pastes a key. This eliminates the whole
-// class of "Friday sent a model id the provider retired last quarter"
-// bugs — the dropdown is always what the account actually has access to.
+// Model picker offers a curated list of TOOL-CALLING-CAPABLE models per
+// provider (BYOK_KNOWN_MODELS in byok.js). We don't live-fetch anymore:
+// no provider's public /models endpoint advertises tool-calling
+// capability, so a live list would keep including models that reject
+// `tools` (Groq: whisper-*, *-guard-*, gemma-*).
 //
-// A "Custom…" option preserves the escape hatch for pre-release model
-// ids that aren't in the public list yet.
+// A "Custom…" option lets the user type any model id — the escape hatch
+// for new releases we haven't added yet, or for text-only calls where a
+// non-tool model is fine.
 
-import { DEFAULT_MODELS as BYOK_DEFAULT_MODELS, KNOWN_MODELS as BYOK_KNOWN_MODELS, listModels as byokListModels } from "./byok.js";
+import { DEFAULT_MODELS as BYOK_DEFAULT_MODELS, KNOWN_MODELS as BYOK_KNOWN_MODELS } from "./byok.js";
 
 const CUSTOM_MODEL_VALUE = "__custom__";
-// Cache the last live fetch per (provider, apiKey) so opening + closing
-// Settings doesn't re-hit the provider every time. Cleared on Refresh.
-const liveModelsCache = new Map();
-function cacheKey(provider, apiKey) { return `${provider}:${apiKey || ""}`; }
 
 function setByokStatus(text, kind /* "info" | "ok" | "error" */) {
   const el = $("byokStatus");
@@ -784,18 +784,16 @@ function setByokStatus(text, kind /* "info" | "ok" | "error" */) {
   if (kind === "error") el.classList.add("byok-status--error");
 }
 
-function fillByokSelect(provider, options, { live } = { live: false }) {
+function populateByokModels(provider) {
   const sel = $("byokModelSel");
   if (!sel) return;
   sel.innerHTML = "";
-  const currentSaved = (settings.byokModel || "").trim();
-  const ids = options.map((o) => (typeof o === "string" ? o : o.id));
-  for (const opt of options) {
-    const id = typeof opt === "string" ? opt : opt.id;
+  const ids = BYOK_KNOWN_MODELS[provider] || [];
+  const defaultId = BYOK_DEFAULT_MODELS[provider] || ids[0] || "";
+  for (const id of ids) {
     const el = document.createElement("option");
     el.value = id;
-    const isDefault = !live && id === BYOK_DEFAULT_MODELS[provider];
-    el.textContent = isDefault ? `${id}  (default)` : id;
+    el.textContent = id === defaultId ? `${id}  (default)` : id;
     sel.appendChild(el);
   }
   const customOpt = document.createElement("option");
@@ -803,16 +801,15 @@ function fillByokSelect(provider, options, { live } = { live: false }) {
   customOpt.textContent = "Custom…";
   sel.appendChild(customOpt);
 
-  if (currentSaved && ids.includes(currentSaved)) {
-    sel.value = currentSaved;
-  } else if (currentSaved && !ids.includes(currentSaved)) {
-    // User has a saved id the live list doesn't include — keep it usable
-    // via Custom so we don't silently drop it.
+  const saved = (settings.byokModel || "").trim();
+  if (saved && ids.includes(saved)) {
+    sel.value = saved;
+  } else if (saved) {
+    // User previously saved a custom id — keep it editable via Custom
+    // instead of silently swapping to the default.
     sel.value = CUSTOM_MODEL_VALUE;
-  } else if (live && options.length) {
-    sel.value = ids[0]; // first live model, alphabetical
   } else {
-    sel.value = BYOK_DEFAULT_MODELS[provider] || ids[0] || "";
+    sel.value = defaultId;
   }
   updateByokCustomVisibility();
 }
@@ -826,45 +823,6 @@ function updateByokCustomVisibility() {
   if (isCustom && !custom.value) custom.value = (settings.byokModel || "").trim();
 }
 
-async function fetchByokModels(provider, apiKey, { force = false } = {}) {
-  const sel = $("byokModelSel");
-  const refreshBtn = $("byokRefreshBtn");
-  if (!provider || !apiKey) {
-    fillByokSelect(provider, BYOK_KNOWN_MODELS[provider] || [], { live: false });
-    setByokStatus("Enter a key to load the live model list.", "info");
-    return;
-  }
-  const key = cacheKey(provider, apiKey);
-  if (!force && liveModelsCache.has(key)) {
-    fillByokSelect(provider, liveModelsCache.get(key), { live: true });
-    setByokStatus(`${liveModelsCache.get(key).length} model(s) available (cached).`, "ok");
-    return;
-  }
-  if (sel) sel.disabled = true;
-  if (refreshBtn) refreshBtn.disabled = true;
-  setByokStatus(`Fetching ${provider} models…`, "info");
-  try {
-    const list = await byokListModels({ provider, apiKey });
-    if (!list.length) throw new Error("provider returned an empty model list");
-    liveModelsCache.set(key, list);
-    fillByokSelect(provider, list, { live: true });
-    setByokStatus(`${list.length} model(s) available.`, "ok");
-  } catch (err) {
-    // Don't silently fall back to a hardcoded default — that's how we got
-    // into this mess. Surface the error so the user sees "bad key" vs
-    // "network" vs "provider outage" and fixes the root cause.
-    const msg = err && err.message ? err.message : String(err);
-    setByokStatus(`Fetch failed — ${msg.slice(0, 140)}`, "error");
-    // Keep the Custom option available so the user can still type a model
-    // id manually while they debug the key. Do NOT auto-populate stale
-    // ids: an empty dropdown + Custom is honest about what we know.
-    fillByokSelect(provider, [], { live: true });
-  } finally {
-    if (sel) sel.disabled = false;
-    if (refreshBtn) refreshBtn.disabled = false;
-  }
-}
-
 function renderByok() {
   const providerSel = $("byokProviderSel");
   const keyInput = $("byokApiKeyInput");
@@ -872,9 +830,8 @@ function renderByok() {
   const provider = settings.byokProvider || "gemini";
   providerSel.value = provider;
   keyInput.value = settings.byokApiKey || "";
-  // Fire and forget — the async fetch updates status + dropdown when it
-  // resolves; the UI stays responsive in the meantime.
-  fetchByokModels(provider, settings.byokApiKey);
+  populateByokModels(provider);
+  setByokStatus(settings.byokApiKey ? `Key set for ${provider}.` : "No key set.", settings.byokApiKey ? "ok" : "info");
 }
 
 async function onByokSave() {
@@ -894,41 +851,23 @@ async function onByokSave() {
     setByokStatus(`"${model}" is a provider name, not a model id — clearing so the default applies.`, "error");
     model = "";
   }
-  const providerChanged = provider !== settings.byokProvider;
-  const keyChanged = apiKey !== settings.byokApiKey;
   await saveSetting("byokProvider", provider);
   await saveSetting("byokApiKey", apiKey);
   await saveSetting("byokModel", model);
-  // If the provider or key changed, refresh the live list so the dropdown
-  // reflects the new account. If only the model changed, no refresh
-  // needed.
-  if (providerChanged || keyChanged) {
-    await fetchByokModels(provider, apiKey, { force: true });
-  } else {
-    setByokStatus(model ? `Saved. Using ${model}.` : "Saved.", "ok");
-  }
+  setByokStatus(model ? `Saved. Using ${model}.` : `Saved. Using ${BYOK_DEFAULT_MODELS[provider]} (default).`, "ok");
 }
 
 function wireByok() {
   const providerSel = $("byokProviderSel");
   if (!providerSel) return;
   providerSel.addEventListener("change", () => {
-    // Fetch immediately on provider change if we already have a key —
-    // the user shouldn't have to click Save just to see the model list.
-    const apiKey = $("byokApiKeyInput").value.trim();
-    fetchByokModels(providerSel.value, apiKey);
+    // Repopulate the model list for the newly-selected provider so the
+    // user immediately sees that provider's tool-capable options.
+    populateByokModels(providerSel.value);
   });
   const sel = $("byokModelSel");
   if (sel) sel.addEventListener("change", updateByokCustomVisibility);
   $("byokSaveBtn").addEventListener("click", onByokSave);
-  const refresh = $("byokRefreshBtn");
-  if (refresh) {
-    refresh.addEventListener("click", () => {
-      const provider = $("byokProviderSel").value;
-      const apiKey = $("byokApiKeyInput").value.trim();
-      fetchByokModels(provider, apiKey, { force: true });
-    });
-  }
 }
 
 // ─── MCP servers ─────────────────────────────────────────────────────

@@ -727,21 +727,6 @@ body[data-view="settings"] .settings-view {
   color: #a01919;
 }
 
-/* Model dropdown + inline refresh button */
-.byok-model-row {
-  display: flex;
-  gap: 6px;
-  align-items: stretch;
-}
-.byok-model-row select { flex: 1; }
-.byok-refresh {
-  flex-shrink: 0;
-  width: 34px;
-  color: var(--text-muted);
-}
-.byok-refresh:hover { color: var(--accent); }
-.byok-refresh:disabled { opacity: 0.5; cursor: not-allowed; }
-
 /* ─── Agent run view (Task 4.4) ───────────────────────────────────── */
 
 .run-view {

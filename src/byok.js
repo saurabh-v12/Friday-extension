@@ -17,28 +17,30 @@ export const BYOK_PROVIDERS = Object.freeze({
   GROQ: "groq",
 });
 
-// Fallback defaults — used only when the live /models fetch can't run
-// (no key yet) or fails and the user hasn't picked something explicit.
-// The live-model dropdown in Settings is the authoritative source; these
-// values keep going stale on their own (Groq deprecated the entire
-// llama-3.2-vision-preview line in early 2025, and llama-4-scout on
-// 2026-07-17), so we do NOT rely on them at request time when a key is
-// available.
+// Default model per provider — the top entry of KNOWN_MODELS[provider].
+// Applied when no explicit model is saved, when the saved model looks like
+// a provider name, or as the picker's initial selection.
 export const DEFAULT_MODELS = Object.freeze({
   gemini: "gemini-2.0-flash",
   openai: "gpt-4o-mini",
-  groq: "llama-3.3-70b-versatile", // text; vision users should pick a
-                                    // llama-4 variant from the live list.
+  groq: "llama-3.3-70b-versatile",
 });
 
-// Pre-fetch suggestions surfaced in the Settings dropdown BEFORE the user
-// enters a key (so the picker isn't empty). Once a key is present we
-// fetch the live list and this array is ignored. Deliberately short —
-// keeping it small reduces the chance of a stale entry misleading users.
+// Curated list of TOOL-CALLING-CAPABLE models per provider, top = default.
+//
+// Not a fallback anymore — this is what the Settings dropdown offers.
+// Reason: the tool-calling chat loop (`chatWithTools`) 400s when the user
+// picks a model without tool support, and no provider's public /models
+// endpoint advertises tool-calling capability (Groq's is the worst
+// offender — `whisper-*`, `*-guard-*`, `gemma-*` all appear active but
+// reject `tools`). Live-fetching couldn't filter these out, so we curate.
+//
+// A "Custom…" option in the picker lets users type any model id when new
+// ones ship or they want to try a non-tool model for text-only calls.
 export const KNOWN_MODELS = Object.freeze({
-  gemini: ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"],
+  gemini: ["gemini-2.0-flash", "gemini-2.5-flash", "gemini-1.5-flash"],
   openai: ["gpt-4o-mini", "gpt-4o", "gpt-4.1-mini"],
-  groq: ["llama-3.3-70b-versatile", "meta-llama/llama-4-maverick-17b-128e-instruct"],
+  groq: ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "openai/gpt-oss-120b"],
 });
 
 // True if `model` looks like the user typed the provider name into the
@@ -63,113 +65,6 @@ export async function callByok({ provider, apiKey, model, prompt, imageDataUrl }
   const impl = IMPLS[p];
   if (!impl) throw new Error(`BYOK: unknown provider "${p}"`);
   return impl({ apiKey, model: m, prompt, imageDataUrl });
-}
-
-// ─── Live model listing ─────────────────────────────────────────────
-//
-// Root cause of the recurring Groq 404s: hardcoded model IDs go stale
-// on their own schedule (Groq deprecated llama-3.2-*-vision-preview in
-// early 2025 and llama-4-scout-17b-16e-instruct on 2026-07-17). The
-// only fix that doesn't require a code change every few months is to
-// ask the provider what it currently serves.
-//
-// listModels({provider, apiKey}) → [{id, meta}]
-//   • Rejects if the key is missing or the API returns non-2xx — callers
-//     surface the error to the user instead of quietly falling back to
-//     a hardcoded default that may itself be dead.
-//   • Returns a flat array of {id, ...} sorted alphabetically. Extra
-//     provider-specific fields (context window, owned_by, description)
-//     ride along so the UI can group / filter later without another
-//     fetch.
-
-const REQ_TIMEOUT_MS = 15_000;
-
-async function fetchJson(url, init = {}) {
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), REQ_TIMEOUT_MS);
-  try {
-    const res = await fetch(url, { ...init, signal: ctrl.signal });
-    const text = await res.text();
-    if (!res.ok) {
-      // Try to pull the provider's error message out; fall back to raw.
-      let detail = text;
-      try {
-        const parsed = JSON.parse(text);
-        detail = parsed?.error?.message || parsed?.message || text;
-      } catch (_) { /* keep raw */ }
-      const err = new Error(`${res.status}: ${String(detail).slice(0, 300)}`);
-      err.status = res.status;
-      throw err;
-    }
-    try { return JSON.parse(text); } catch (e) {
-      throw new Error(`invalid JSON from ${url}: ${e.message}`);
-    }
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-async function listGeminiModels(apiKey) {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(apiKey)}`;
-  const data = await fetchJson(url);
-  const raw = Array.isArray(data.models) ? data.models : [];
-  return raw
-    // Keep only models the /generateContent endpoint accepts — otherwise
-    // users could pick an embedding model and get confusing errors.
-    .filter((m) => (m.supportedGenerationMethods || []).includes("generateContent"))
-    .map((m) => ({
-      id: String(m.name || "").replace(/^models\//, ""),
-      description: m.description || m.displayName || "",
-      contextTokens: m.inputTokenLimit || null,
-    }))
-    .filter((m) => m.id);
-}
-
-async function listOpenAIModels(apiKey) {
-  const data = await fetchJson("https://api.openai.com/v1/models", {
-    headers: { Authorization: `Bearer ${apiKey}` },
-  });
-  const raw = Array.isArray(data.data) ? data.data : [];
-  return raw
-    .map((m) => ({
-      id: String(m.id || ""),
-      ownedBy: m.owned_by || "",
-      created: m.created || 0,
-    }))
-    .filter((m) => m.id);
-}
-
-async function listGroqModels(apiKey) {
-  const data = await fetchJson("https://api.groq.com/openai/v1/models", {
-    headers: { Authorization: `Bearer ${apiKey}` },
-  });
-  const raw = Array.isArray(data.data) ? data.data : [];
-  return raw
-    // Groq's /models includes deactivated entries; skip them so users
-    // never see a listed-but-dead model.
-    .filter((m) => m.active !== false)
-    .map((m) => ({
-      id: String(m.id || ""),
-      contextWindow: m.context_window || null,
-      ownedBy: m.owned_by || "",
-    }))
-    .filter((m) => m.id);
-}
-
-const MODEL_LISTERS = {
-  [BYOK_PROVIDERS.GEMINI]: listGeminiModels,
-  [BYOK_PROVIDERS.OPENAI]: listOpenAIModels,
-  [BYOK_PROVIDERS.GROQ]:   listGroqModels,
-};
-
-export async function listModels({ provider, apiKey } = {}) {
-  if (!provider) throw new Error("listModels: provider required");
-  if (!apiKey) throw new Error("listModels: API key required");
-  const impl = MODEL_LISTERS[provider];
-  if (!impl) throw new Error(`listModels: unknown provider "${provider}"`);
-  const list = await impl(apiKey);
-  list.sort((a, b) => a.id.localeCompare(b.id));
-  return list;
 }
 
 // Split a data URL "data:image/png;base64,AAAA…" into {mime, base64}.
