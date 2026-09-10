@@ -65,6 +65,18 @@ const handlers = {
     return { tabId: tab.id, tabUrl: tab.url, ...data };
   },
 
+  async [MESSAGE_TYPES.EXECUTE](payload) {
+    const tab = await ensureContentInActiveTab();
+    const data = await sendToTab(tab.id, MESSAGE_TYPES.EXECUTE, payload);
+    return { tabId: tab.id, ...data };
+  },
+
+  async [MESSAGE_TYPES.RESOLVE](payload) {
+    const tab = await ensureContentInActiveTab();
+    const data = await sendToTab(tab.id, MESSAGE_TYPES.RESOLVE, payload);
+    return { tabId: tab.id, ...data };
+  },
+
   async [MESSAGE_TYPES.CAPTURE_TAB](payload) {
     const tab = await ensureContentInActiveTab();
     // Run capture + snapshot in parallel — one is a Chrome API call from the

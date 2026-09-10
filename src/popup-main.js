@@ -260,6 +260,98 @@ async function onRedact() {
   }
 }
 
+async function ensureSnapshot() {
+  // Executor needs a fresh fidMap in content.js — trigger a CAPTURE_TAB
+  // which populates it as a side-effect.
+  await sendToBackground(MESSAGE_TYPES.CAPTURE_TAB);
+}
+
+async function onResolve() {
+  const intent = $("intentInput").value.trim();
+  if (!intent) { log("[resolve] enter an intent"); return; }
+  await ensureSnapshot();
+  try {
+    const { matches, best } = await sendToBackground(MESSAGE_TYPES.RESOLVE, { intent });
+    log(`[resolve] intent="${intent}" matches=${matches.length}`);
+    for (const m of matches) log(`[resolve.match] ${m.fid} role=${m.role} score=${m.score} name="${m.name.slice(0, 60)}"`);
+    setStatus(best ? `best: ${best.fid} ${best.role}` : "no match");
+  } catch (err) {
+    log(`[resolve] FAILED — ${err.message}`);
+  }
+}
+
+async function resolveAndAct(action, extra) {
+  const intent = $("intentInput").value.trim();
+  if (!intent) { log(`[${action}] enter an intent`); return; }
+  await ensureSnapshot();
+  try {
+    const { best } = await sendToBackground(MESSAGE_TYPES.RESOLVE, { intent });
+    if (!best) { log(`[${action}] no match for "${intent}"`); return; }
+    const result = await sendToBackground(MESSAGE_TYPES.EXECUTE, { action, fid: best.fid, ...extra });
+    log(`[${action}] ${result.fid} <${result.tag}> ms=${result.ms.toFixed(1)}${result.chars != null ? ` chars=${result.chars}` : ""}`);
+    setStatus(`${action} → ${best.fid} (${best.role})`);
+  } catch (err) {
+    log(`[${action}] FAILED — ${err.message}`);
+  }
+}
+
+// Task 3.3 verification set — each entry: {intent, expectedName, action, text?}.
+// The intent is what a user might type; expectedName is the exact
+// accessible-name string the resolver should land on.
+const VERIFY_SET = [
+  { intent: "submit order", expectedName: "Submit Order", action: "click" },
+  { intent: "continue", expectedName: "Continue", action: "click" },
+  { intent: "delete account", expectedName: "Delete Account", action: "click" },
+  { intent: "cancel", expectedName: "Cancel", action: "click" },
+  { intent: "×", expectedName: "×", action: "click" },       // tiny X
+  { intent: "close", expectedName: "Close", action: "click" }, // tiny
+  { intent: "edit", expectedName: "Edit", action: "click" },   // tiny
+  { intent: "save", expectedName: "Save", action: "click" },   // tiny (ambiguous vs Save Draft — hardest case)
+  { intent: "email", expectedName: "Email address", action: "type", text: "user@example.com" },
+  { intent: "password", expectedName: "Password", action: "type", text: "supersecret" },
+  { intent: "full name", expectedName: "Full name", action: "type", text: "Jane Doe" },
+  { intent: "learn more", expectedName: "Learn more", action: "click" },
+  { intent: "privacy policy", expectedName: "Privacy policy", action: "click" },
+  { intent: "terms of service", expectedName: "Terms of service", action: "click" },
+  { intent: "next", expectedName: "Next", action: "click" },
+  { intent: "previous", expectedName: "Previous", action: "click" },
+  { intent: "save draft", expectedName: "Save Draft", action: "click" },
+  { intent: "publish", expectedName: "Publish", action: "click" },
+];
+
+async function onVerifyExecutor() {
+  setStatus("running verification…");
+  log(`[verify] running ${VERIFY_SET.length} intents against the test page`);
+  try {
+    await ensureSnapshot();
+    let resolveHits = 0, clickHits = 0;
+    for (const { intent, expectedName, action, text } of VERIFY_SET) {
+      const { best } = await sendToBackground(MESSAGE_TYPES.RESOLVE, { intent });
+      const resolveOk = best && best.name.toLowerCase() === expectedName.toLowerCase();
+      if (resolveOk) resolveHits++;
+      let execOk = false, execErr = null;
+      if (best) {
+        try {
+          const extra = action === "type" ? { text } : {};
+          await sendToBackground(MESSAGE_TYPES.EXECUTE, { action, fid: best.fid, ...extra });
+          execOk = true;
+        } catch (err) { execErr = err.message; }
+      }
+      if (execOk) clickHits++;
+      const marker = resolveOk ? "✓" : "✗";
+      log(`[verify] ${marker} "${intent}" → ${best ? `"${best.name}"` : "(no match)"} action=${action} exec=${execOk ? "OK" : (execErr || "skip")}`);
+    }
+    const rPct = ((resolveHits / VERIFY_SET.length) * 100).toFixed(1);
+    const cPct = ((clickHits / VERIFY_SET.length) * 100).toFixed(1);
+    log(`[verify] resolve accuracy: ${resolveHits}/${VERIFY_SET.length} = ${rPct}%`);
+    log(`[verify] exec accuracy: ${clickHits}/${VERIFY_SET.length} = ${cPct}%`);
+    setStatus(`verify: resolve ${rPct}% · exec ${cPct}%`);
+  } catch (err) {
+    log(`[verify] FAILED — ${err.message}`);
+    setStatus("verify failed");
+  }
+}
+
 async function onSafePayload() {
   setStatus("running full pipeline…");
   try {
@@ -322,4 +414,8 @@ document.addEventListener("DOMContentLoaded", () => {
   $("ocrBtn").addEventListener("click", onRunOcr);
   $("redactBtn").addEventListener("click", onRedact);
   $("payloadBtn").addEventListener("click", onSafePayload);
+  $("resolveBtn").addEventListener("click", onResolve);
+  $("clickBtn").addEventListener("click", () => resolveAndAct("click"));
+  $("typeBtn").addEventListener("click", () => resolveAndAct("type", { text: $("typeInput").value }));
+  $("verifyBtn").addEventListener("click", onVerifyExecutor);
 });

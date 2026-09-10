@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Friday — Executor Test Page (Task 3.3)</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <style>
+      body {
+        font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        padding: 30px;
+        max-width: 780px;
+        color: #111;
+      }
+      h1 { font-size: 20px; margin-bottom: 4px; }
+      .note { color: #666; font-size: 13px; margin-bottom: 24px; }
+      .row { margin: 14px 0; display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+      button {
+        font-family: inherit;
+        font-size: 14px;
+        padding: 8px 14px;
+        border: 1px solid #d0d0d5;
+        border-radius: 6px;
+        background: #f8f8fa;
+        cursor: pointer;
+      }
+      button:hover { background: #eeeef1; }
+      button.tiny { padding: 1px 4px; font-size: 9px; border-radius: 3px; }
+      button.hit { background: #d7f5db; border-color: #64c674; }
+      label { display: inline-flex; flex-direction: column; font-size: 12px; color: #444; }
+      label > input {
+        padding: 6px 8px;
+        font: inherit;
+        border: 1px solid #d0d0d5;
+        border-radius: 6px;
+        min-width: 220px;
+      }
+      a { color: #ff2e63; }
+      a.hit { background: #d7f5db; padding: 1px 4px; border-radius: 3px; }
+      #verifyBanner {
+        margin-top: 20px;
+        padding: 10px 14px;
+        border: 1px dashed #ff2e63;
+        border-radius: 8px;
+        color: #ff2e63;
+        font-size: 13px;
+        display: none;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(4, auto);
+        gap: 8px;
+        align-items: start;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Friday — Executor Test Page</h1>
+    <p class="note">
+      Open the Friday popup while this page is the active tab, type an intent
+      like <code>submit order</code>, then click <b>Click best</b>. Or use the
+      popup's <b>Verify executor</b> button to run the full intent set in one
+      shot and log a hit/miss accuracy score.
+    </p>
+
+    <div class="row">
+      <button data-tid="submit-order">Submit Order</button>
+      <button data-tid="continue">Continue</button>
+      <button data-tid="delete-account">Delete Account</button>
+      <button data-tid="cancel">Cancel</button>
+    </div>
+
+    <div class="row">
+      <button class="tiny" data-tid="tiny-x">×</button>
+      <button class="tiny" data-tid="tiny-close">Close</button>
+      <button class="tiny" data-tid="tiny-edit">Edit</button>
+      <button class="tiny" data-tid="tiny-save">Save</button>
+    </div>
+
+    <div class="row">
+      <label>
+        Email address
+        <input id="email" type="email" data-tid="email" autocomplete="email" placeholder="you@example.com" />
+      </label>
+      <label>
+        Password
+        <input id="password" type="password" data-tid="password" autocomplete="current-password" />
+      </label>
+      <label>
+        Full name
+        <input id="fullname" type="text" data-tid="fullname" autocomplete="name" placeholder="Jane Doe" />
+      </label>
+    </div>
+
+    <div class="row">
+      <a href="#" data-tid="learn-more">Learn more</a>
+      <a href="#" data-tid="privacy-policy">Privacy policy</a>
+      <a href="#" data-tid="terms">Terms of service</a>
+    </div>
+
+    <div class="row">
+      <button data-tid="next">Next</button>
+      <button data-tid="previous">Previous</button>
+      <button data-tid="save-draft">Save Draft</button>
+      <button data-tid="publish">Publish</button>
+    </div>
+
+    <div id="verifyBanner">Waiting for Friday…</div>
+
+    <script>
+      // Track which controls Friday hit so the popup can verify accuracy.
+      window.__fridayHits = new Set();
+      window.__fridayTyped = new Map();
+
+      for (const el of document.querySelectorAll("[data-tid]")) {
+        const tid = el.dataset.tid;
+        // Buttons & links → click marks it green.
+        el.addEventListener("click", (e) => {
+          if (el.tagName === "A") e.preventDefault();
+          window.__fridayHits.add(tid);
+          el.classList.add("hit");
+        });
+        // Inputs → any input event marks it as typed-into.
+        if (el.tagName === "INPUT") {
+          el.addEventListener("input", () => {
+            window.__fridayTyped.set(tid, el.value);
+            el.style.background = "#d7f5db";
+            window.__fridayHits.add(tid);
+          });
+        }
+      }
+    </script>
+  </body>
+</html>

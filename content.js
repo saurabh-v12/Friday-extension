@@ -23,7 +23,15 @@
   const MSG = {
     CONTENT_PING: "CONTENT_PING",
     SNAPSHOT: "SNAPSHOT",
+    EXECUTE: "EXECUTE",
+    RESOLVE: "RESOLVE",
   };
+
+  // Map fid → live element, rebuilt on every collectSnapshot() call. Used by
+  // EXECUTE so click/type/scroll targets the SAME element the snapshot
+  // surfaced — no stale coordinates, no pixel guessing.
+  let currentFidMap = new Map();
+  let lastSnapshotAt = 0;
 
   // ─── Snapshot helpers ─────────────────────────────────────────────
 
@@ -191,11 +199,15 @@
     const includeInvisible = !!(opts && opts.includeInvisible);
     const all = document.querySelectorAll(CAPTURE_SELECTOR);
     const elements = [];
+    const nextMap = new Map();
     for (let i = 0; i < all.length; i++) {
       const snap = snapshotElement(all[i], i);
       if (!includeInvisible && !snap.visible) continue;
       elements.push(snap);
+      nextMap.set(snap.fid, all[i]);
     }
+    currentFidMap = nextMap;
+    lastSnapshotAt = Date.now();
     return {
       page: { url: location.href, title: document.title, readyState: document.readyState },
       viewport: {
@@ -208,8 +220,110 @@
       elements,
       elementCount: elements.length,
       totalScanned: all.length,
-      capturedAt: Date.now(),
+      capturedAt: lastSnapshotAt,
     };
+  }
+
+  // ─── Executor + resolver (Tasks 3.1 + 3.2) ────────────────────────
+
+  function assertReady(fid) {
+    if (currentFidMap.size === 0) {
+      throw new Error("no snapshot yet — call SNAPSHOT/CAPTURE_TAB before EXECUTE");
+    }
+    const el = currentFidMap.get(fid);
+    if (!el) throw new Error(`fid not found: ${fid}`);
+    if (!el.isConnected) throw new Error(`element ${fid} was detached — re-snapshot the page`);
+    return el;
+  }
+
+  function isDisabled(el) {
+    if (el.disabled) return true;
+    if (el.getAttribute("aria-disabled") === "true") return true;
+    return false;
+  }
+
+  function scrollElementIntoView(el, opts = {}) {
+    try {
+      el.scrollIntoView({ behavior: opts.smooth ? "smooth" : "auto", block: "center", inline: "center" });
+    } catch { el.scrollIntoView(); }
+  }
+
+  function fireInputEvents(el) {
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+
+  function setInputValue(el, text) {
+    const tag = el.tagName.toLowerCase();
+    if (tag === "input" || tag === "textarea") {
+      // React and other libs listen for the native setter — invoke it via
+      // the prototype so their internal state updates too.
+      const proto = tag === "input" ? HTMLInputElement.prototype : HTMLTextAreaElement.prototype;
+      const setter = Object.getOwnPropertyDescriptor(proto, "value");
+      if (setter && setter.set) setter.set.call(el, text);
+      else el.value = text;
+      fireInputEvents(el);
+      return;
+    }
+    if (el.isContentEditable) {
+      el.focus();
+      // Select all then insert — the standard "replace" flow.
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+      document.execCommand("insertText", false, text);
+      return;
+    }
+    throw new Error("target is not a text field or contenteditable");
+  }
+
+  function typeIntoInput(el, text, opts = {}) {
+    if (isDisabled(el)) throw new Error("target is disabled");
+    scrollElementIntoView(el, opts);
+    el.focus();
+    if (opts.append) {
+      const current = "value" in el ? (el.value || "") : (el.textContent || "");
+      setInputValue(el, current + text);
+    } else {
+      setInputValue(el, text);
+    }
+  }
+
+  function clickElement(el) {
+    if (isDisabled(el)) throw new Error("target is disabled");
+    scrollElementIntoView(el);
+    // el.click() dispatches a synthetic MouseEvent — this fires bubbling
+    // click listeners AND triggers <label for> → input activation, which
+    // hand-rolled MouseEvent dispatches sometimes miss.
+    el.click();
+  }
+
+  // Very small resolver: finds a snapshot element whose accessible name
+  // (or role+name combo, or href) matches an intent string. Intended for
+  // quick text-to-fid mapping; the Phase-4 LLM will do the heavier lifting.
+  function resolveIntent(intent, options = {}) {
+    if (!intent || typeof intent !== "string") throw new Error("intent required");
+    const q = intent.trim().toLowerCase();
+    const wantsRole = options.role ? options.role.toLowerCase() : null;
+
+    const candidates = [];
+    for (const [fid, el] of currentFidMap.entries()) {
+      const name = accessibleName(el).toLowerCase();
+      const role = (computedRole(el) || "").toLowerCase();
+      if (wantsRole && role !== wantsRole) continue;
+      if (!name) continue;
+      let score = 0;
+      if (name === q) score = 100;
+      else if (name.includes(q)) score = 60 - Math.abs(name.length - q.length);
+      else if (q.includes(name) && name.length > 2) score = 40;
+      // Bonus for interactive roles when the intent looks like an action.
+      if (["button", "link", "textbox"].includes(role)) score += 5;
+      if (score > 0) candidates.push({ fid, score, role, name });
+    }
+    candidates.sort((a, b) => b.score - a.score);
+    return { matches: candidates.slice(0, 5), best: candidates[0] || null };
   }
 
   const handlers = {
@@ -229,6 +343,38 @@
     },
     [MSG.SNAPSHOT](payload) {
       return collectSnapshot(payload);
+    },
+    [MSG.EXECUTE](payload) {
+      const { action, fid, text, options } = payload || {};
+      if (!action) throw new Error("EXECUTE requires action");
+      const el = assertReady(fid);
+      const t0 = performance.now();
+      switch (action) {
+        case "click": {
+          clickElement(el);
+          return { ok: true, action, fid, tag: el.tagName.toLowerCase(), ms: performance.now() - t0 };
+        }
+        case "type": {
+          if (typeof text !== "string") throw new Error("type action requires text");
+          typeIntoInput(el, text, options || {});
+          return { ok: true, action, fid, tag: el.tagName.toLowerCase(), chars: text.length, ms: performance.now() - t0 };
+        }
+        case "focus": {
+          scrollElementIntoView(el);
+          el.focus();
+          return { ok: true, action, fid, ms: performance.now() - t0 };
+        }
+        case "scroll": {
+          scrollElementIntoView(el, options || {});
+          return { ok: true, action, fid, ms: performance.now() - t0 };
+        }
+        default:
+          throw new Error(`unknown EXECUTE action: ${action}`);
+      }
+    },
+    [MSG.RESOLVE](payload) {
+      const { intent, role } = payload || {};
+      return resolveIntent(intent, { role });
     },
   };
 

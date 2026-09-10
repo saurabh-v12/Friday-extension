@@ -19,6 +19,12 @@ export const MESSAGE_TYPES = Object.freeze({
   // combined into one structured payload. Content-side type is SNAPSHOT.
   CAPTURE_TAB: "CAPTURE_TAB",
   SNAPSHOT: "SNAPSHOT",
+  // BG-side: forward an executor action (click / type / scroll / focus) to
+  // the content script. Content-side type is EXECUTE.
+  EXECUTE: "EXECUTE",
+  // Content-side: resolve an intent string to a specific element fid.
+  // (Executor + resolver bridge — used by Phase 4 for LLM tool-calls.)
+  RESOLVE: "RESOLVE",
 });
 
 // Persisted user preferences. Keep this list authoritative — new UI state

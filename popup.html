@@ -71,6 +71,20 @@
       <span id="status">idle</span>
     </div>
 
+    <div class="row" style="align-items: stretch;">
+      <input id="intentInput" type="text" placeholder='intent, e.g. "sign in"' style="flex:1; padding:6px 8px; font: inherit; border:1px solid #d0d0d5; border-radius:6px;" />
+      <button id="resolveBtn" type="button">Resolve</button>
+      <button id="clickBtn" type="button">Click best</button>
+    </div>
+    <div class="row" style="align-items:stretch;">
+      <input id="typeInput" type="text" placeholder="text to type" style="flex:1; padding:6px 8px; font: inherit; border:1px solid #d0d0d5; border-radius:6px;" />
+      <button id="typeBtn" type="button">Type into best</button>
+    </div>
+    <div class="row">
+      <button id="verifyBtn" type="button">Verify executor</button>
+      <span style="font-size:11px; color:#777;">requires test/executor-test.html open</span>
+    </div>
+
     <img id="captureImg" alt="last capture" style="display:none; width:100%; margin-top:8px; border:1px solid #e5e5ea; border-radius:6px;" />
 
     <progress id="progress" value="0" max="100"></progress>
