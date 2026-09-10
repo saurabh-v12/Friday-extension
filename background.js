@@ -77,6 +77,12 @@ const handlers = {
     return { tabId: tab.id, ...data };
   },
 
+  async [MESSAGE_TYPES.SNAPSHOT_COMPACT](payload) {
+    const tab = await ensureContentInActiveTab();
+    const data = await sendToTab(tab.id, MESSAGE_TYPES.SNAPSHOT_COMPACT, payload);
+    return { tabId: tab.id, tabUrl: tab.url, ...data };
+  },
+
   async [MESSAGE_TYPES.CAPTURE_TAB](payload) {
     const tab = await ensureContentInActiveTab();
     // Run capture + snapshot in parallel — one is a Chrome API call from the

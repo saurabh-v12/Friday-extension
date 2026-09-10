@@ -25,6 +25,8 @@
     SNAPSHOT: "SNAPSHOT",
     EXECUTE: "EXECUTE",
     RESOLVE: "RESOLVE",
+    SNAPSHOT_COMPACT: "SNAPSHOT_COMPACT",
+    EXEC_TOOL: "EXEC_TOOL",
   };
 
   // Map fid → live element, rebuilt on every collectSnapshot() call. Used by
@@ -326,6 +328,124 @@
     return { matches: candidates.slice(0, 5), best: candidates[0] || null };
   }
 
+  // ─── Compact snapshot for chat / tool-calling (Task: SEEING) ──────
+  //
+  // Different shape from collectSnapshot() above:
+  //   • No bboxes, no image — this is JSON to hand an LLM.
+  //   • Each interactive element gets a `selector` you can pass right
+  //     back to click()/type() via EXEC_TOOL. If the element has a
+  //     unique real id we use it; otherwise we stamp a `data-friday-id`
+  //     during snapshot so a later selector query stays anchored to the
+  //     exact node the LLM saw.
+  //   • Visibility: offsetParent !== null (skips display:none / detached
+  //     subtrees) + non-zero size. Cheap and matches what a user sees.
+  //   • Elements capped at maxElements to keep tokens low; text fields
+  //     truncated so we don't paste a novel into the LLM's context.
+
+  const COMPACT_SELECTOR = [
+    "button",
+    "a[href]",
+    "input:not([type=hidden])",
+    "textarea",
+    "select",
+    "[role=button]",
+    "[role=link]",
+    "[role=textbox]",
+    "[contenteditable='']",
+    "[contenteditable=true]",
+  ].join(",");
+
+  function isCompactVisible(el) {
+    // offsetParent is null when: parent has display:none, position:fixed
+    // rules aside, and detached subtrees. Cheap enough to run 200×.
+    if (el.offsetParent === null && getComputedStyle(el).position !== "fixed") return false;
+    const r = el.getBoundingClientRect();
+    if (r.width < 1 || r.height < 1) return false;
+    const style = getComputedStyle(el);
+    if (style.visibility === "hidden" || parseFloat(style.opacity || "1") === 0) return false;
+    return true;
+  }
+
+  function stableSelector(el, counter) {
+    // Prefer a real id when it's unique on the page — a lot of pages use
+    // ids that survive re-renders, which is exactly what a tool-call
+    // target needs. Fall back to a stamped data-friday-id otherwise.
+    if (el.id) {
+      try {
+        if (document.querySelectorAll(`#${CSS.escape(el.id)}`).length === 1) {
+          return `#${CSS.escape(el.id)}`;
+        }
+      } catch { /* CSS.escape can throw on some weird ids — fall through */ }
+    }
+    let fid = el.getAttribute("data-friday-id");
+    if (!fid) {
+      fid = `fri-${counter.n++}`;
+      el.setAttribute("data-friday-id", fid);
+    }
+    return `[data-friday-id="${fid}"]`;
+  }
+
+  function safeCompactText(el) {
+    const tag = el.tagName.toLowerCase();
+    if (tag === "input" || tag === "textarea") {
+      // Never leak password/OTP/cc-* values into the LLM prompt.
+      const type = (el.getAttribute("type") || "text").toLowerCase();
+      const auto = (el.getAttribute("autocomplete") || "").toLowerCase();
+      if (type === "password" || /(current-password|new-password|cc-number|cc-csc|one-time-code)/.test(auto)) {
+        return el.value ? "(hidden)" : "";
+      }
+      const v = (el.value || "").trim();
+      return v.length > 80 ? v.slice(0, 80) + "…" : v;
+    }
+    const txt = (el.innerText || el.textContent || "").trim().replace(/\s+/g, " ");
+    return txt.length > 80 ? txt.slice(0, 80) + "…" : txt;
+  }
+
+  function collectCompactSnapshot({ maxElements = 150, maxText = 3000 } = {}) {
+    // Clear old data-friday-id stamps so a re-snapshot doesn't accumulate.
+    // Cheap: one attribute-selector sweep.
+    for (const stale of document.querySelectorAll("[data-friday-id]")) {
+      stale.removeAttribute("data-friday-id");
+    }
+
+    const counter = { n: 0 };
+    const nodes = document.querySelectorAll(COMPACT_SELECTOR);
+    const elements = [];
+    for (const el of nodes) {
+      if (elements.length >= maxElements) break;
+      if (!isCompactVisible(el)) continue;
+      const tag = el.tagName.toLowerCase();
+      const role = computedRole(el) || tag;
+      const name = accessibleName(el);
+      const text = safeCompactText(el);
+      const selector = stableSelector(el, counter);
+      const out = { id: selector, tag, role, name, text, selector };
+      const type = tag === "input" ? (el.getAttribute("type") || "text").toLowerCase() : null;
+      if (type) out.type = type;
+      if (tag === "a" && el.hasAttribute("href")) out.href = el.getAttribute("href");
+      const ph = el.getAttribute && el.getAttribute("placeholder");
+      if (ph) out.placeholder = ph;
+      elements.push(out);
+    }
+
+    // document.body.innerText already respects display:none and skips
+    // <script>/<style> content — exactly what we want. Cheaper + more
+    // accurate than a manual TreeWalker.
+    const visibleText = ((document.body && document.body.innerText) || "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, maxText);
+
+    return {
+      url: location.href,
+      title: document.title,
+      visibleText,
+      elements,
+      elementCount: elements.length,
+      capturedAt: Date.now(),
+    };
+  }
+
   const handlers = {
     [MSG.CONTENT_PING](payload) {
       const doc = document;
@@ -375,6 +495,9 @@
     [MSG.RESOLVE](payload) {
       const { intent, role } = payload || {};
       return resolveIntent(intent, { role });
+    },
+    [MSG.SNAPSHOT_COMPACT](payload) {
+      return collectCompactSnapshot(payload || {});
     },
   };
 

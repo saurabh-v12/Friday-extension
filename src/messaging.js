@@ -25,6 +25,14 @@ export const MESSAGE_TYPES = Object.freeze({
   // Content-side: resolve an intent string to a specific element fid.
   // (Executor + resolver bridge — used by Phase 4 for LLM tool-calls.)
   RESOLVE: "RESOLVE",
+  // Compact page snapshot for chat / tool-calling flow. Different shape
+  // from SNAPSHOT: no screenshot, no bboxes — just {url, title,
+  // visibleText, elements:[{id, tag, role, name, text, selector, …}]}
+  // designed to slot into an LLM's system message.
+  SNAPSHOT_COMPACT: "SNAPSHOT_COMPACT",
+  // Execute a chat tool call — {tool, args}. Tools: click / type /
+  // scroll / goto / readText / getSnapshot.
+  EXEC_TOOL: "EXEC_TOOL",
 });
 
 // Persisted user preferences. Keep this list authoritative — new UI state
