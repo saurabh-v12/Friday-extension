@@ -42,6 +42,8 @@ export const SETTING_KEYS = Object.freeze([
   "onDeviceOnly",     // boolean — Cloud vs On-Device toggle (derived from reasoningSource)
   "vlmEnabled",       // boolean — opt-in local VLM (deferred per gate 0.7)
   "reasoningSource",  // 'local' | 'byok' — SOURCES from src/router.js
+  "localLlmEnabled",  // boolean - fast WebLLM text model for local chat/agent
+  "localLlmModel",    // string - WebLLM model_id
   "byokProvider",     // 'gemini' | 'openai' | 'groq'
   "byokApiKey",       // string — stored in chrome.storage.local (device-scoped)
   "byokModel",        // string — provider-specific model id
@@ -54,6 +56,8 @@ export const SETTING_DEFAULTS = Object.freeze({
   onDeviceOnly: true,
   vlmEnabled: false,
   reasoningSource: "local",
+  localLlmEnabled: true,
+  localLlmModel: "Qwen2.5-1.5B-Instruct-q4f16_1-MLC",
   byokProvider: "gemini",
   byokApiKey: "",
   byokModel: "",

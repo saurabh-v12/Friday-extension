@@ -1,8 +1,9 @@
 // Vendor-copy step. MV3 blocks remote scripts, so every runtime dependency
 // has to live under dist/vendor/ inside the extension. This script:
 //   1. Copies Transformers.js dist (optional local VLM, gate 0.7).
-//   2. Copies TensorFlow.js UMD + WASM backend UMD + the .wasm binaries.
-//   3. Copies BlazeFace UMD.
+//   2. Copies WebLLM's browser bundle (fast local text LLM + agent).
+//   3. Copies TensorFlow.js UMD + WASM backend UMD + the .wasm binaries.
+//   4. Copies BlazeFace UMD.
 //
 // After first run the on-device detectors (BlazeFace weights, Transformers.js
 // weights) fetch to Cache Storage on first use; nothing needs re-downloading
@@ -47,7 +48,15 @@ await copyDir(
   "Transformers.js dist",
 );
 
-// 2) TensorFlow.js core UMD + WASM backend UMD + WASM binaries.
+// 2) WebLLM. Model weights + model wasm libraries download once through
+//    WebLLM and then cache in the browser for offline reuse.
+await copyDir(
+  join(NM, "@mlc-ai", "web-llm", "lib"),
+  join(OUT, "webllm"),
+  "WebLLM lib",
+);
+
+// 3) TensorFlow.js core UMD + WASM backend UMD + WASM binaries.
 await mkdir(join(OUT, "tfjs"), { recursive: true });
 await copyOne(
   join(NM, "@tensorflow", "tfjs", "dist", "tf.min.js"),

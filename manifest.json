@@ -29,7 +29,8 @@
         "dist/vendor/tesseract/core/*",
         "dist/vendor/tfjs/*",
         "dist/vendor/blazeface/*",
-        "dist/vendor/transformers/*"
+        "dist/vendor/transformers/*",
+        "dist/vendor/webllm/*"
       ],
       "matches": ["<all_urls>"]
     }

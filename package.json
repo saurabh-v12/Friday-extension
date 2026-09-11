@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@huggingface/transformers": "^3.0.0",
+    "@mlc-ai/web-llm": "^0.2.85",
     "@tensorflow-models/blazeface": "^0.1.0",
     "@tensorflow/tfjs": "^4.22.0",
     "@tensorflow/tfjs-backend-wasm": "^4.22.0",

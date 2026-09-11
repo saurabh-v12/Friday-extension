@@ -5,7 +5,8 @@
 //
 // - Chat/Agent pill        → dropdown menu, updates label, persists `mode`.
 // - Cloud/On-Device toggle → flips `data-on-device`, persists `onDeviceOnly`.
-// - Settings gear          → swaps the body from empty-state → settings view.
+// - Settings gear          → toggles the body between settings and the
+//                            previous view (home / run / receipt).
 // - VLM opt-in (settings)  → persists `vlmEnabled`; reveals a Download button
 //                            that runs the shared loader (src/model.js) and
 //                            shows real progress; second click reports cached.
@@ -24,6 +25,16 @@ import { runChatTurn } from "./chatAgent.js";
 import { supportsToolCalling, chatPlain } from "./byok.js";
 import { matchShortcut, runShortcut } from "./shortcuts.js";
 import { matchPageAnswer, runPageAnswer } from "./pageAnswers.js";
+import {
+  DEFAULT_LOCAL_LLM_MODEL,
+  LOCAL_LLM_MODELS,
+  chatLocalPlain,
+  detectLocalLlmSupport,
+  ensureLocalLlm,
+  localLlmState,
+  normalizeLocalModel,
+} from "./localLlm.js";
+import { runLocalAgentTurn } from "./localAgent.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -131,6 +142,7 @@ function renderDeviceToggle() {
   );
   const sdv = $("settingsDeviceValue");
   if (sdv) sdv.textContent = onDevice ? "On-Device" : "Cloud";
+  renderModelLabel();
 }
 
 function wireDeviceToggle() {
@@ -151,21 +163,19 @@ function openSettings() {
   setView(VIEWS.SETTINGS);
   renderMode();
   renderDeviceToggle();
+  renderLocalLlm();
   renderVlmToggle();
   renderByok();
   renderMcp();
 }
 function closeSettings() {
-  // The X (and Escape) always returns to home. Simpler mental model than
-  // remembering the previous view — receipt and run are one click away.
   setView(VIEWS.HOME);
 }
 
 function wireSettings() {
   $("settingsBtn").addEventListener("click", openSettings);
-  $("settingsBackBtn").addEventListener("click", closeSettings);
-  const closeX = $("settingsCloseBtn");
-  if (closeX) closeX.addEventListener("click", closeSettings);
+  $("settingsBackBtn")?.addEventListener("click", closeSettings);
+  $("settingsCloseBtn")?.addEventListener("click", closeSettings);
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && getView() === VIEWS.SETTINGS) closeSettings();
   });
@@ -318,6 +328,8 @@ function pickSubmitFlow(source, provider, mode) {
   // Chat mode → plain provider chat completion (no snapshot, no tools).
   // Agent mode + tool-capable provider → the SEEING/CONTROLLING tool loop.
   // Local or anything else → legacy vision+ReAct agent path.
+  if (source === "local" && mode === "chat") return "local-chat";
+  if (source === "local") return "local-tools";
   if (source === "byok" && mode === "chat") return "chat-plain";
   if (source === "byok" && mode === "agent" && supportsToolCalling(provider)) return "chat-tools";
   return "legacy-agent";
@@ -381,9 +393,20 @@ async function onSubmitComposer(e) {
 
   const cloudUnusable = source === "byok" && !settings.byokApiKey;
   if (cloudUnusable) {
+    agentInFlight = true;
+    setComposerBusy(true);
     openRunView(task);
     appendUserBubble(task);
-    appendAssistantBubble("Cloud selected but no API key. Open Settings → Cloud API key to paste one, or switch the header toggle back to On-Device.");
+    try {
+      await runLocalFallbackFlow({ task, mode, reason: "Cloud has no API key, so I switched to the local LLM." });
+    } catch (err) {
+      const raw = err && err.message ? err.message : String(err);
+      appendAssistantBubble(`Error: ${friendlyError(raw)}`);
+    } finally {
+      agentInFlight = false;
+      setComposerBusy(false);
+      $("runStatus").textContent = "Chat";
+    }
     return;
   }
 
@@ -393,7 +416,11 @@ async function onSubmitComposer(e) {
   appendUserBubble(task);
 
   try {
-    if (flow === "chat-plain") {
+    if (flow === "local-chat") {
+      await runLocalPlainFlow({ task });
+    } else if (flow === "local-tools") {
+      await runLocalToolsFlow({ task, mode });
+    } else if (flow === "chat-plain") {
       await runChatPlainFlow({ task, provider });
     } else if (flow === "chat-tools") {
       await runChatToolsFlow({ task, mode, provider });
@@ -402,7 +429,11 @@ async function onSubmitComposer(e) {
     }
   } catch (err) {
     const raw = err && err.message ? err.message : String(err);
-    appendAssistantBubble(`Error: ${friendlyError(raw)}`);
+    if (source === "byok" && isCloudLimitError(raw)) {
+      await runLocalFallbackFlow({ task, mode, reason: "Cloud rate limit hit, so I switched to the local LLM." });
+    } else {
+      appendAssistantBubble(`Error: ${friendlyError(raw)}`);
+    }
   } finally {
     // Fixes stuck-spinner from earlier build — we ALWAYS unwind here,
     // even if the flow threw or was cancelled.
@@ -439,6 +470,99 @@ async function runPageAnswerFlow({ task, intent }) {
 // Plain chat: no snapshot, no tools. The demo happy path — Chat mode +
 // BYOK → provider chat completion → answer. SEEING/CONTROLLING (the
 // tool-calling loop) is reserved for Agent mode.
+function localLlmIsEnabled() {
+  return settings.localLlmEnabled !== false;
+}
+
+function selectedLocalLlmModel() {
+  return normalizeLocalModel(settings.localLlmModel || DEFAULT_LOCAL_LLM_MODEL);
+}
+
+async function runLocalFallbackFlow({ task, mode, reason }) {
+  const statusRow = appendStatusRow(reason || "Switching to local LLM...");
+  try {
+    await saveSetting("reasoningSource", "local");
+    await saveSetting("onDeviceOnly", true);
+    renderDeviceToggle();
+    renderModelLabel();
+    if (mode === "chat") {
+      await runLocalPlainFlow({ task });
+    } else {
+      await runLocalToolsFlow({ task, mode });
+    }
+  } finally {
+    if (statusRow) statusRow.remove();
+  }
+}
+
+async function runLocalPlainFlow({ task }) {
+  if (!localLlmIsEnabled()) {
+    appendAssistantBubble("Local LLM is disabled. Open Settings and enable Local LLM to keep working offline.");
+    return;
+  }
+  const statusRow = appendStatusRow("Loading local LLM...");
+  const setStatus = (text) => { if (statusRow) statusRow.textContent = text; };
+  const messages = [
+    { role: "system", content: "You are Friday, a concise local browser assistant running fully on this laptop." },
+    ...chatHistory.slice(-8).filter((m) => ["user", "assistant"].includes(m.role) && typeof m.content === "string"),
+    { role: "user", content: task },
+  ];
+  let text = "";
+  try {
+    text = await chatLocalPlain({
+      modelId: selectedLocalLlmModel(),
+      messages,
+      onProgress: (p) => setStatus(`${p.text || "Loading local LLM"} ${p.pct ? `(${p.pct.toFixed(0)}%)` : ""}`.trim()),
+    });
+  } finally {
+    if (statusRow) statusRow.remove();
+  }
+  appendAssistantBubble(text || "(empty local reply)");
+  chatHistory.push({ role: "user", content: task });
+  chatHistory.push({ role: "assistant", content: text || "" });
+  await persistChatHistory();
+}
+
+async function runLocalToolsFlow({ task, mode }) {
+  if (!localLlmIsEnabled()) {
+    appendAssistantBubble("Local LLM is disabled. Open Settings and enable Local LLM to keep working offline.");
+    return;
+  }
+  const statusRow = appendStatusRow("Loading local agent...");
+  const setStatus = (text) => { if (statusRow) statusRow.textContent = text; };
+
+  const { text, assistantMessage } = await runLocalAgentTurn({
+    userMessage: task,
+    history: chatHistory,
+    mode,
+    modelId: selectedLocalLlmModel(),
+    onEvent: (evt) => {
+      if (evt.phase === "local-load") {
+        setStatus(`${evt.text || "Loading local LLM"} ${evt.pct ? `(${evt.pct.toFixed(0)}%)` : ""}`.trim());
+      } else if (evt.phase === "snapshot") {
+        if (evt.ok) setStatus(`Local agent sees ${evt.elementCount} elements`);
+        else setStatus("Local agent has no page context");
+      } else if (evt.phase === "model-call") {
+        setStatus(`Local reasoning (step ${evt.step})...`);
+      } else if (evt.phase === "tool-call") {
+        setStatus(`Running local tool: ${evt.name}`);
+      } else if (evt.phase === "tool-result") {
+        appendToolChip(evt.name, evt.args || {}, evt.result || {});
+      }
+    },
+  });
+
+  if (statusRow) statusRow.remove();
+  appendAssistantBubble(text || "(empty local reply)");
+  chatHistory.push({ role: "user", content: task });
+  chatHistory.push({
+    role: "assistant",
+    content: assistantMessage && assistantMessage.content ? assistantMessage.content : text || "",
+  });
+  await persistChatHistory();
+  if (mode === "agent") speakIfEnabled(text);
+}
+
 async function runChatPlainFlow({ task, provider }) {
   const statusRow = appendStatusRow("Thinking…");
   const messages = [
@@ -581,6 +705,10 @@ function friendlyError(msg) {
   return msg;
 }
 
+function isCloudLimitError(msg) {
+  return /\b429\b|rate limit|rate_limit|quota|tokens per minute|tpm|too many requests/i.test(String(msg || ""));
+}
+
 function wireComposer() {
   const composer = $("composer");
   if (composer) composer.addEventListener("submit", onSubmitComposer);
@@ -590,6 +718,8 @@ function wireComposer() {
   if (closeBtn) closeBtn.addEventListener("click", closeRunView);
   const newBtn = $("newChatBtn");
   if (newBtn) newBtn.addEventListener("click", newChat);
+  const modelPill = $("modelPill");
+  if (modelPill) modelPill.addEventListener("click", openSettings);
 }
 
 // ─── Voice: STT (5.1) + wake word (5.2) + TTS (5.3) ──────────────────
@@ -802,6 +932,113 @@ function wireReceipt() {
 
 // ─── VLM opt-in + first-run download ─────────────────────────────────
 
+function renderModelLabel() {
+  const label = $("modelLabel");
+  if (!label) return;
+  const source = settings.reasoningSource || "local";
+  if (source === "local") {
+    const id = selectedLocalLlmModel();
+    const model = LOCAL_LLM_MODELS.find((m) => m.id === id);
+    label.textContent = model ? model.label.replace(" - recommended", "") : "Local LLM";
+  } else {
+    const provider = settings.byokProvider || "Cloud";
+    label.textContent = settings.byokModel || provider[0].toUpperCase() + provider.slice(1);
+  }
+}
+
+function renderLocalLlm() {
+  const enabled = localLlmIsEnabled();
+  const cb = $("localLlmToggle");
+  const body = $("localLlmBody");
+  const sel = $("localLlmModelSel");
+  if (cb) cb.checked = enabled;
+  if (body) body.hidden = !enabled;
+  if (sel) {
+    sel.innerHTML = "";
+    for (const model of LOCAL_LLM_MODELS) {
+      const opt = document.createElement("option");
+      opt.value = model.id;
+      opt.textContent = model.id === DEFAULT_LOCAL_LLM_MODEL ? `${model.label} (default)` : model.label;
+      opt.title = model.hint;
+      sel.appendChild(opt);
+    }
+    sel.value = selectedLocalLlmModel();
+  }
+  updateLocalLlmStatusLine();
+  renderModelLabel();
+}
+
+function updateLocalLlmStatusLine() {
+  const status = $("localLlmStatus");
+  const btn = $("localLlmLoadBtn");
+  if (!status) return;
+  if (!localLlmIsEnabled()) {
+    status.textContent = "Disabled.";
+  } else if (localLlmState.engine) {
+    status.textContent = `Loaded ${localLlmState.modelId} in ${(localLlmState.loadMs / 1000).toFixed(1)}s.`;
+    if (btn) btn.textContent = "Reload local LLM";
+  } else {
+    status.textContent = "Not loaded yet. First load downloads once, then browser cache keeps it.";
+    if (btn) btn.textContent = "Load local LLM";
+  }
+}
+
+async function onLocalLlmToggleChange(e) {
+  await saveSetting("localLlmEnabled", !!e.target.checked);
+  renderLocalLlm();
+}
+
+async function onLocalLlmModelChange(e) {
+  await saveSetting("localLlmModel", normalizeLocalModel(e.target.value));
+  updateLocalLlmStatusLine();
+  renderModelLabel();
+}
+
+async function onLocalLlmLoad() {
+  const btn = $("localLlmLoadBtn");
+  const bar = $("localLlmProgress");
+  const status = $("localLlmStatus");
+  if (!localLlmIsEnabled()) return;
+  if (btn) btn.disabled = true;
+  if (bar) { bar.hidden = false; bar.value = 0; }
+  if (status) status.textContent = "Checking WebGPU...";
+
+  const gpu = await detectLocalLlmSupport();
+  if (status) {
+    status.textContent = gpu.available
+      ? `WebGPU ready (${gpu.vendor}${gpu.architecture ? `/${gpu.architecture}` : ""}). Loading local LLM...`
+      : `WebGPU unavailable (${gpu.reason}).`;
+  }
+  if (!gpu.available) {
+    if (btn) btn.disabled = false;
+    if (bar) bar.hidden = true;
+    return;
+  }
+
+  try {
+    await ensureLocalLlm({
+      modelId: selectedLocalLlmModel(),
+      onProgress: (evt) => {
+        if (bar) bar.value = evt.pct || 0;
+        if (status) status.textContent = `${evt.text || "Loading local LLM"} ${evt.pct ? `(${evt.pct.toFixed(0)}%)` : ""}`.trim();
+      },
+    });
+    if (bar) bar.value = 100;
+    updateLocalLlmStatusLine();
+  } catch (err) {
+    if (status) status.textContent = `Load failed - ${err?.message || err}`;
+  } finally {
+    if (btn) btn.disabled = false;
+    if (bar) setTimeout(() => { bar.hidden = true; }, 800);
+  }
+}
+
+function wireLocalLlm() {
+  $("localLlmToggle")?.addEventListener("change", onLocalLlmToggleChange);
+  $("localLlmModelSel")?.addEventListener("change", onLocalLlmModelChange);
+  $("localLlmLoadBtn")?.addEventListener("click", onLocalLlmLoad);
+}
+
 function renderVlmToggle() {
   const enabled = !!settings.vlmEnabled;
   const cb = $("vlmToggle");
@@ -966,6 +1203,7 @@ async function onByokSave() {
   await saveSetting("byokProvider", provider);
   await saveSetting("byokApiKey", apiKey);
   await saveSetting("byokModel", model);
+  renderModelLabel();
   setByokStatus(model ? `Saved. Using ${model}.` : `Saved. Using ${BYOK_DEFAULT_MODELS[provider]} (default).`, "ok");
 }
 
@@ -1046,6 +1284,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   wireModePill();
   wireDeviceToggle();
   wireSettings();
+  wireLocalLlm();
   wireVlm();
   wireByok();
   wireMcp();

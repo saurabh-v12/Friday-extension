@@ -171,6 +171,27 @@
             </div>
             <div class="settings-row-value" id="settingsDeviceValue">—</div>
           </li>
+          <li class="settings-row settings-row--stacked" id="localLlmRow">
+            <div class="settings-row-head">
+              <div>
+                <div class="settings-row-label">Local LLM (offline)</div>
+                <div class="settings-row-hint">
+                  Runs chat and agent reasoning on your GPU. After first load it can work without cloud tokens.
+                </div>
+              </div>
+              <label class="switch" aria-label="Enable local LLM">
+                <input id="localLlmToggle" type="checkbox" />
+                <span class="switch-slider" aria-hidden="true"></span>
+              </label>
+            </div>
+            <div class="settings-row-body" id="localLlmBody">
+              <select id="localLlmModelSel" class="text-input" aria-label="Local LLM model"></select>
+              <div class="vlm-status" id="localLlmStatus">Not loaded yet.</div>
+              <progress class="model-progress" id="localLlmProgress" value="0" max="100" hidden></progress>
+              <button class="btn-primary" id="localLlmLoadBtn" type="button">Load local LLM</button>
+            </div>
+          </li>
+
           <li class="settings-row settings-row--stacked" id="byokRow">
             <div class="settings-row-head">
               <div>
