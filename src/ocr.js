@@ -158,7 +158,7 @@ function redactShort(kind, val) {
 // Per-word scan first — catches most single-token PII (email, aadhaar 12-run,
 // PAN, SSN). Then a full-text sweep for patterns that Tesseract may split
 // across words (phone numbers with spaces).
-function detectTextPii(words, fullText) {
+function detectTextPiiLegacy(words, fullText) {
   const hits = [];
   for (const w of words) {
     if (!w.text || w.text.length < 4) continue;
@@ -193,6 +193,112 @@ function detectTextPii(words, fullText) {
     }
   }
   return hits;
+}
+
+function detectTextPii(words, fullText) {
+  const hits = [];
+  const seen = new Set();
+  const addHit = (hit) => {
+    const b = hit.bbox;
+    const key = `${hit.kind}:${hit.evidence}:${b ? `${Math.round(b.x)},${Math.round(b.y)},${Math.round(b.w)},${Math.round(b.h)}` : "full"}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    hits.push(hit);
+  };
+
+  for (const w of words || []) {
+    if (!w.text || w.text.length < 4) continue;
+    for (const { rx, kind } of WORD_TESTS) {
+      const m = w.text.match(rx);
+      if (m) {
+        addHit({
+          kind,
+          evidence: redactShort(kind, m[0]),
+          bbox: w.bbox,
+          text: w.text,
+          source: "ocr",
+          confidence: w.confidence,
+        });
+      }
+    }
+  }
+
+  for (const hit of detectPhrasePii(words)) addHit(hit);
+
+  const kindsSeen = new Set(hits.map((h) => h.kind));
+  const fullTests = WORD_TESTS.filter((t) => !kindsSeen.has(t.kind));
+  for (const { rx, kind } of fullTests) {
+    const m = String(fullText || "").match(rx);
+    if (m) {
+      addHit({
+        kind,
+        evidence: redactShort(kind, m[0]),
+        bbox: null,
+        text: m[0].slice(0, 60),
+        source: "ocr-fulltext",
+      });
+    }
+  }
+  return hits;
+}
+
+function detectPhrasePii(words) {
+  const hits = [];
+  const cleanWords = (words || [])
+    .filter((w) => w && w.bbox && w.text && /[A-Za-z0-9]/.test(w.text))
+    .sort((a, b) => {
+      const dy = a.bbox.y - b.bbox.y;
+      if (Math.abs(dy) > 16) return dy;
+      return a.bbox.x - b.bbox.x;
+    });
+
+  for (let i = 0; i < cleanWords.length; i++) {
+    for (let len = 2; len <= 5 && i + len <= cleanWords.length; len++) {
+      const slice = cleanWords.slice(i, i + len);
+      if (!sameTextLine(slice)) break;
+      const joined = slice.map((w) => w.text).join(" ");
+      const compact = slice.map((w) => w.text).join("");
+      for (const { rx, kind } of WORD_TESTS) {
+        const m = joined.match(rx) || compact.match(rx);
+        if (!m) continue;
+        hits.push({
+          kind,
+          evidence: redactShort(kind, m[0]),
+          bbox: unionBbox(slice.map((w) => w.bbox)),
+          text: joined.slice(0, 80),
+          source: "ocr-phrase",
+          confidence: Math.min(...slice.map((w) => Number(w.confidence) || 0)),
+        });
+      }
+    }
+  }
+  return hits;
+}
+
+function sameTextLine(words) {
+  if (!words.length) return false;
+  const first = words[0].bbox;
+  const baseY = first.y + first.h / 2;
+  return words.every((w) => {
+    const b = w.bbox;
+    const y = b.y + b.h / 2;
+    return Math.abs(y - baseY) <= Math.max(10, Math.max(first.h, b.h) * 0.75);
+  });
+}
+
+function unionBbox(boxes) {
+  const xs = boxes.map((b) => b.x);
+  const ys = boxes.map((b) => b.y);
+  const rs = boxes.map((b) => b.x + b.w);
+  const bs = boxes.map((b) => b.y + b.h);
+  const x = Math.min(...xs);
+  const y = Math.min(...ys);
+  return {
+    x,
+    y,
+    w: Math.max(...rs) - x,
+    h: Math.max(...bs) - y,
+  };
 }
 
 export async function runOcrOnDataUrl(dataUrl, opts) {

@@ -32,6 +32,7 @@ export function collectRegions({ dom, faces, ocr, viewport, imageWidth, imageHei
   // DOM: scale from CSS px → image px.
   for (const h of (dom && dom.hits) || []) {
     if (!h.bbox) continue;
+    if (!shouldUseDomRegion(h, viewport)) continue;
     const scaled = {
       x: h.bbox.x * sx,
       y: h.bbox.y * sy,
@@ -52,6 +53,27 @@ export function collectRegions({ dom, faces, ocr, viewport, imageWidth, imageHei
     out.push({ bbox: expand(f.box, pad + 12), kind: "face", source: "blazeface" });
   }
   return out;
+}
+
+function shouldUseDomRegion(hit, viewport) {
+  const tag = String(hit.tag || "").toLowerCase();
+  const type = String(hit.type || "").toLowerCase();
+  const b = hit.bbox || {};
+  const vw = viewport && viewport.width ? viewport.width : 0;
+  const vh = viewport && viewport.height ? viewport.height : 0;
+  const area = Math.max(0, Number(b.w) || 0) * Math.max(0, Number(b.h) || 0);
+  const viewportArea = vw * vh;
+
+  // DOM labels in rich apps can map to a whole viewer/card/panel. That is
+  // useful as a PII signal, but too coarse for destructive pixel deletion.
+  // Keep DOM deletion for tight form fields; visual PII is handled by OCR
+  // word/phrase boxes and face boxes.
+  if (!["input", "textarea", "select"].includes(tag)) return false;
+  if (["button", "submit", "reset", "image", "hidden"].includes(type)) return false;
+  if (viewportArea && area / viewportArea > 0.08) return false;
+  if (vw && b.w > vw * 0.9) return false;
+  if (vh && b.h > vh * 0.25) return false;
+  return true;
 }
 
 function firstKind(kinds) {
