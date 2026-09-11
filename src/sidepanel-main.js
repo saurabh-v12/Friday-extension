@@ -152,8 +152,8 @@ function renderDeviceToggle() {
   renderModelLabel();
 }
 
-function wireDeviceToggle() {
-  $("deviceToggle").addEventListener("click", async () => {
+async function toggleDeviceReasoning() {
+  try {
     const currentlyOnDevice = settings.reasoningSource
       ? settings.reasoningSource === "local"
       : settings.onDeviceOnly !== false;
@@ -161,6 +161,22 @@ function wireDeviceToggle() {
     await saveSetting("reasoningSource", nextSource);
     await saveSetting("onDeviceOnly", nextSource === "local");
     renderDeviceToggle();
+  } catch (err) {
+    console.warn("[friday.sidepanel] device toggle failed:", err);
+  }
+}
+
+function wireDeviceToggle() {
+  $("deviceToggle")?.addEventListener("click", async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    await toggleDeviceReasoning();
+  });
+  document.addEventListener("click", async (e) => {
+    const trigger = e.target && e.target.closest && e.target.closest("#deviceToggle");
+    if (!trigger || e.defaultPrevented) return;
+    e.preventDefault();
+    await toggleDeviceReasoning();
   });
 }
 
@@ -168,19 +184,34 @@ function wireDeviceToggle() {
 
 function openSettings() {
   setView(VIEWS.SETTINGS);
-  renderMode();
-  renderDeviceToggle();
-  renderLocalLlm();
-  renderVlmToggle();
-  renderByok();
-  renderMcp();
+  const renders = [
+    ["mode", renderMode],
+    ["device", renderDeviceToggle],
+    ["local-llm", renderLocalLlm],
+    ["vlm", renderVlmToggle],
+    ["byok", renderByok],
+    ["mcp", renderMcp],
+  ];
+  for (const [name, fn] of renders) {
+    try {
+      fn();
+    } catch (err) {
+      console.warn(`[friday.sidepanel] settings render failed (${name}):`, err);
+    }
+  }
 }
 function closeSettings() {
   setView(VIEWS.HOME);
 }
 
 function wireSettings() {
-  $("settingsBtn").addEventListener("click", openSettings);
+  $("settingsBtn")?.addEventListener("click", openSettings);
+  document.addEventListener("click", (e) => {
+    const trigger = e.target && e.target.closest && e.target.closest("#settingsBtn, #modelPill");
+    if (!trigger) return;
+    e.preventDefault();
+    openSettings();
+  });
   $("settingsBackBtn")?.addEventListener("click", closeSettings);
   $("settingsCloseBtn")?.addEventListener("click", closeSettings);
   document.addEventListener("keydown", (e) => {
