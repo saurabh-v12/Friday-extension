@@ -20,7 +20,14 @@ import { loadModel, detectWebGPU, state as modelState } from "./model.js";
 import { runPrivacyPipeline, KIND_LABEL } from "./pipeline.js";
 import { runAgent, needsPage, DEFAULT_MAX_STEPS } from "./agent.js";
 import { SOURCES } from "./router.js";
-import { isSttSupported, startDictation, speak, isTtsSupported, startWakeWord } from "./voice.js";
+import {
+  ensureMicrophonePermission,
+  isSttSupported,
+  startDictation,
+  speak,
+  isTtsSupported,
+  startWakeWord,
+} from "./voice.js";
 import { runChatTurn } from "./chatAgent.js";
 import { supportsToolCalling, chatPlain } from "./byok.js";
 import { matchShortcut, runShortcut } from "./shortcuts.js";
@@ -726,6 +733,24 @@ function wireComposer() {
 
 let dictationSession = null;
 let wakeSession = null;
+let voiceStarting = false;
+
+function setVoiceStatus(text, kind = "info") {
+  const el = $("voiceStatus");
+  if (!el) return;
+  el.textContent = text || "";
+  el.hidden = !text;
+  el.dataset.kind = kind;
+}
+
+function friendlyVoiceError(err) {
+  const msg = String(err?.message || err || "");
+  if (/not-allowed|permission|denied/i.test(msg)) return "Microphone permission is blocked. Allow mic access for Friday, then try again.";
+  if (/no-speech/i.test(msg)) return "I didn't hear anything. Click the mic and speak again.";
+  if (/network/i.test(msg)) return "Speech recognition needs Chrome's speech service. Check internet, or type this one.";
+  if (/not supported/i.test(msg)) return "Voice input is not supported in this browser.";
+  return msg || "Voice input failed.";
+}
 
 function setMicState(state) {
   const micBtn = $("micBtn");
@@ -743,27 +768,51 @@ function setMicState(state) {
   );
 }
 
-function onMicClick() {
+async function onMicClick() {
   if (dictationSession) {
-    dictationSession.stop();
+    dictationSession.abort ? dictationSession.abort() : dictationSession.stop();
     dictationSession = null;
+    setVoiceStatus("Stopped listening.");
     setMicState(wakeSession ? "wake" : "idle");
     return;
   }
+  if (voiceStarting) return;
   if (!isSttSupported()) {
     // No STT — give the composer focus as a fallback.
+    setVoiceStatus("Voice input is not supported in this browser.", "error");
     const inp = $("composerInput");
     if (inp) inp.focus();
     return;
   }
   const input = $("composerInput");
+  voiceStarting = true;
   setMicState("listening");
+  setVoiceStatus("Allow microphone access, then speak...");
+  try {
+    await ensureMicrophonePermission();
+    setVoiceStatus("Listening...");
+  } catch (err) {
+    console.warn("[friday.voice] mic permission failed:", err);
+    voiceStarting = false;
+    setMicState(wakeSession ? "wake" : "idle");
+    setVoiceStatus(friendlyVoiceError(err), "error");
+    return;
+  }
+  voiceStarting = false;
+  let submitted = false;
   dictationSession = startDictation({
-    onInterim: (text) => { if (input) input.value = text; },
-    onFinal: (text) => {
+    onInterim: (text) => {
       if (input) input.value = text;
+      if (text) setVoiceStatus(`Heard: ${text}`, "ok");
+    },
+    onFinal: (text) => {
+      const finalText = String(text || "").trim();
+      if (!finalText || submitted) return;
+      submitted = true;
+      if (input) input.value = finalText;
       dictationSession = null;
       setMicState(wakeSession ? "wake" : "idle");
+      setVoiceStatus("Submitting voice command...", "ok");
       // Auto-submit like the send button — the user's finger is off the mic
       // by the time this fires, so a quiet auto-submit is the whole point.
       onSubmitComposer({ preventDefault() {} });
@@ -772,10 +821,14 @@ function onMicClick() {
       console.warn("[friday.voice] STT error:", err);
       dictationSession = null;
       setMicState(wakeSession ? "wake" : "idle");
+      setVoiceStatus(friendlyVoiceError(err), "error");
     },
-    onEnd: () => {
+    onEnd: (text) => {
       dictationSession = null;
       if (!wakeSession) setMicState("idle");
+      if (!submitted && !String(text || "").trim()) {
+        setVoiceStatus("No speech detected. Click the mic and try again.", "error");
+      }
     },
   });
 }
@@ -784,13 +837,18 @@ function onMicLongPress() {
   if (wakeSession) {
     wakeSession.stop();
     wakeSession = null;
+    setVoiceStatus("Wake word stopped.");
     setMicState("idle");
     return;
   }
-  if (!isSttSupported()) return;
+  if (!isSttSupported()) {
+    setVoiceStatus("Voice input is not supported in this browser.", "error");
+    return;
+  }
   wakeSession = startWakeWord({
     phrase: "hey friday",
     onWake: () => {
+      setVoiceStatus("Wake word heard. Speak your command...", "ok");
       // Give the user a subtle audio ack; TTS is quicker than a beep here.
       speak("Yes?");
     },
@@ -798,10 +856,15 @@ function onMicLongPress() {
       if (!task) return;
       const input = $("composerInput");
       if (input) input.value = task;
+      setVoiceStatus("Submitting voice command...", "ok");
       onSubmitComposer({ preventDefault() {} });
     },
-    onError: (err) => console.warn("[friday.voice] wake-word error:", err),
+    onError: (err) => {
+      console.warn("[friday.voice] wake-word error:", err);
+      setVoiceStatus(friendlyVoiceError(err), "error");
+    },
   });
+  setVoiceStatus("Wake word active.");
   setMicState("wake");
 }
 
@@ -809,19 +872,29 @@ function wireVoice() {
   const micBtn = $("micBtn");
   if (!micBtn) return;
   setMicState("idle");
-  // Left-click: one-shot dictation. Long-press / right-click: wake word.
+  micBtn.title = isSttSupported() ? "Click and speak" : "Voice input is not supported";
+  // Click: one-shot dictation. Long-press / right-click: wake word.
   let pressTimer = null;
-  let longPressed = false;
-  micBtn.addEventListener("mousedown", () => {
-    longPressed = false;
-    pressTimer = setTimeout(() => { longPressed = true; onMicLongPress(); }, 600);
+  let suppressClick = false;
+  micBtn.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0) return;
+    suppressClick = false;
+    pressTimer = setTimeout(() => {
+      suppressClick = true;
+      onMicLongPress();
+    }, 650);
   });
-  micBtn.addEventListener("mouseup", () => {
+  micBtn.addEventListener("pointerup", () => {
     if (pressTimer) clearTimeout(pressTimer);
-    if (longPressed) return;
+  });
+  micBtn.addEventListener("pointerleave", () => { if (pressTimer) clearTimeout(pressTimer); });
+  micBtn.addEventListener("click", () => {
+    if (suppressClick) {
+      suppressClick = false;
+      return;
+    }
     onMicClick();
   });
-  micBtn.addEventListener("mouseleave", () => { if (pressTimer) clearTimeout(pressTimer); });
   micBtn.addEventListener("contextmenu", (e) => { e.preventDefault(); onMicLongPress(); });
 }
 

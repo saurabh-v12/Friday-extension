@@ -21,6 +21,21 @@ export function isTtsSupported() {
   return typeof window.speechSynthesis !== "undefined";
 }
 
+export async function ensureMicrophonePermission() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    return { ok: true, skipped: true };
+  }
+  let stream = null;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    return { ok: true };
+  } finally {
+    if (stream) {
+      for (const track of stream.getTracks()) track.stop();
+    }
+  }
+}
+
 export function createRecognition({ continuous = false, interimResults = true, lang = "en-US" } = {}) {
   const RC = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (!RC) throw new Error("Web Speech Recognition is not supported in this browser");
@@ -56,6 +71,7 @@ export function stopSpeaking() {
 export function startDictation({ onInterim, onFinal, onEnd, onError, lang = "en-US" } = {}) {
   const rec = createRecognition({ continuous: false, interimResults: true, lang });
   let finalText = "";
+  let finalDelivered = false;
   rec.onresult = (evt) => {
     let interim = "";
     for (let i = evt.resultIndex; i < evt.results.length; i++) {
@@ -63,8 +79,13 @@ export function startDictation({ onInterim, onFinal, onEnd, onError, lang = "en-
       if (r.isFinal) finalText += r[0].transcript;
       else interim += r[0].transcript;
     }
-    if (interim && onInterim) onInterim(interim);
-    if (finalText && onFinal) onFinal(finalText.trim());
+    const visible = [finalText, interim].filter(Boolean).join(" ").trim();
+    if (visible && onInterim) onInterim(visible);
+    if (finalText && onFinal && !finalDelivered) {
+      finalDelivered = true;
+      onFinal(finalText.trim());
+      try { rec.stop(); } catch (_) {}
+    }
   };
   rec.onerror = (evt) => { if (onError) onError(evt.error || "speech-error"); };
   rec.onend = () => { if (onEnd) onEnd(finalText.trim()); };

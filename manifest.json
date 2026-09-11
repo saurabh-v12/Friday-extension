@@ -27,6 +27,7 @@
   },
   "permissions": [
     "activeTab",
+    "audioCapture",
     "scripting",
     "storage",
     "sidePanel"
