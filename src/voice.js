@@ -89,7 +89,6 @@ export function startDictation({ onInterim, onFinal, onEnd, onError, lang = "en-
   };
   rec.onerror = (evt) => {
     const error = evt.error || "speech-error";
-    if (/not-allowed|service-not-allowed|audio-capture/i.test(error)) alive = false;
     if (onError) onError(error);
   };
   rec.onend = () => { if (onEnd) onEnd(finalText.trim()); };
@@ -111,56 +110,141 @@ export function startWakeWord({
   onListening,
   onWake,
   onTask,
+  onHeard,
+  onRestart,
   onError,
   lang = "en-US",
+  submitDelayMs = 900,
+  wakeTimeoutMs = 6500,
 } = {}) {
-  const norm = phrase.toLowerCase().replace(/\s+/g, " ").trim();
+  const phrases = Array.isArray(phrase) ? phrase : [phrase];
+  const norms = phrases
+    .map((p) => String(p || "").toLowerCase().replace(/[^\w\s]/g, " ").replace(/\s+/g, " ").trim())
+    .filter(Boolean);
   const rec = createRecognition({ continuous: true, interimResults: true, lang });
   let alive = true;
   let armed = false;      // heard the wake word, capturing the task now
   let taskBuffer = "";
+  let interimTaskBuffer = "";
   let armedAt = 0;
+  let submitTimer = null;
+  let wakeTimer = null;
+
+  const clean = (text) => String(text || "").toLowerCase().replace(/[^\w\s]/g, " ").replace(/\s+/g, " ").trim();
+  const clearTimers = () => {
+    if (submitTimer) clearTimeout(submitTimer);
+    if (wakeTimer) clearTimeout(wakeTimer);
+    submitTimer = null;
+    wakeTimer = null;
+  };
+  const findPhrase = (text) => {
+    const heard = clean(text);
+    for (const norm of norms) {
+      const idx = heard.indexOf(norm);
+      if (idx !== -1) return { norm, before: heard.slice(0, idx).trim(), after: heard.slice(idx + norm.length).trim() };
+    }
+    return null;
+  };
+  const disarm = () => {
+    armed = false;
+    taskBuffer = "";
+    interimTaskBuffer = "";
+    clearTimers();
+  };
+  const currentTask = () => clean([taskBuffer, interimTaskBuffer].filter(Boolean).join(" "));
+  const submitTask = () => {
+    const task = currentTask();
+    if (!task) return;
+    if (onTask) onTask(task);
+    disarm();
+  };
+  const scheduleSubmit = () => {
+    if (!currentTask()) return;
+    if (submitTimer) clearTimeout(submitTimer);
+    submitTimer = setTimeout(submitTask, submitDelayMs);
+  };
+  const scheduleWakeTimeout = () => {
+    if (wakeTimer) clearTimeout(wakeTimer);
+    wakeTimer = setTimeout(disarm, wakeTimeoutMs);
+  };
 
   rec.onresult = (evt) => {
     for (let i = evt.resultIndex; i < evt.results.length; i++) {
       const alt = evt.results[i][0];
-      const heard = (alt.transcript || "").toLowerCase();
+      const heard = alt.transcript || "";
+      const cleanedHeard = clean(heard);
       const isFinal = evt.results[i].isFinal;
+      if (cleanedHeard && onHeard) onHeard(cleanedHeard, { armed, isFinal });
 
       if (!armed) {
-        if (heard.includes(norm)) {
+        const match = findPhrase(heard);
+        if (match) {
+          clearTimers();
+          armed = true;
           armedAt = performance.now();
-          taskBuffer = heard.split(norm).slice(1).join(norm).trim();
-          if (onWake) onWake(taskBuffer);
-          if (isFinal && taskBuffer) {
-            if (onTask) onTask(taskBuffer);
-            armed = false;
-            taskBuffer = "";
+          taskBuffer = isFinal ? match.after : "";
+          interimTaskBuffer = isFinal ? "" : match.after;
+          if (onWake) onWake(match.after);
+          if (currentTask()) {
+            if (isFinal) submitTask();
+            else scheduleSubmit();
           } else {
-            armed = true;
+            scheduleWakeTimeout();
           }
         }
-      } else if (isFinal) {
+      } else {
         // Append final chunk to the task, then hand off.
-        if (heard.includes(norm)) {
-          taskBuffer += " " + heard.split(norm).slice(1).join(norm).trim();
+        const match = findPhrase(heard);
+        const nextTaskText = match ? match.after : cleanedHeard;
+        if (match) {
+          if (isFinal) {
+            taskBuffer = [taskBuffer, nextTaskText].filter(Boolean).join(" ");
+            interimTaskBuffer = "";
+          } else {
+            interimTaskBuffer = nextTaskText;
+          }
         } else {
-          taskBuffer += " " + heard;
+          if (isFinal) {
+            taskBuffer = [taskBuffer, nextTaskText].filter(Boolean).join(" ");
+            interimTaskBuffer = "";
+          } else {
+            interimTaskBuffer = nextTaskText;
+          }
         }
         taskBuffer = taskBuffer.trim();
-        if (taskBuffer && onTask) onTask(taskBuffer);
-        armed = false;
-        taskBuffer = "";
+        interimTaskBuffer = interimTaskBuffer.trim();
+        if (currentTask()) {
+          if (isFinal) submitTask();
+          else scheduleSubmit();
+        } else {
+          scheduleWakeTimeout();
+        }
       }
     }
   };
-  rec.onerror = (evt) => { if (onError) onError(evt.error || "speech-error"); };
+  rec.onerror = (evt) => {
+    const error = evt.error || "speech-error";
+    if (/not-allowed|service-not-allowed|audio-capture/i.test(error)) alive = false;
+    if (onError) onError(error);
+  };
   rec.onend = () => {
+    if (armed && currentTask()) {
+      submitTask();
+    } else {
+      clearTimers();
+    }
     if (!alive) return;
     // Chrome auto-stops after silence — restart if the caller still wants
     // us live. Yield to the event loop first (browsers dislike immediate
     // re-start from onend).
-    setTimeout(() => { if (alive) { try { rec.start(); } catch (_) {} } }, 100);
+    setTimeout(() => {
+      if (!alive) return;
+      try {
+        rec.start();
+        if (armed) scheduleWakeTimeout();
+        if (onRestart) onRestart();
+      } catch (_) {}
+    }, 250);
   };
 
   try {
@@ -173,6 +257,7 @@ export function startWakeWord({
   return {
     stop: () => {
       alive = false;
+      clearTimers();
       try { rec.stop(); } catch (_) {}
     },
   };
