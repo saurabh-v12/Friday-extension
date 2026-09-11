@@ -163,6 +163,8 @@ function closeSettings() {
 function wireSettings() {
   $("settingsBtn").addEventListener("click", openSettings);
   $("settingsBackBtn").addEventListener("click", closeSettings);
+  const closeX = $("settingsCloseBtn");
+  if (closeX) closeX.addEventListener("click", closeSettings);
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && getView() === VIEWS.SETTINGS) closeSettings();
   });

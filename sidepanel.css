@@ -263,6 +263,7 @@ body[data-view="settings"] .settings-view {
   align-items: center;
   gap: 6px;
 }
+.settings-header .settings-close { margin-left: auto; }
 .settings-title {
   margin: 0;
   font-size: 16px;
