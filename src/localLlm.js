@@ -35,7 +35,7 @@ export function normalizeLocalModel(modelId) {
 export async function detectLocalLlmSupport() {
   if (!navigator.gpu) return { available: false, reason: "WebGPU is not available in this browser." };
   try {
-    const adapter = await navigator.gpu.requestAdapter();
+    const adapter = await navigator.gpu.requestAdapter({ powerPreference: "high-performance" });
     if (!adapter) return { available: false, reason: "No WebGPU adapter found." };
     const info = adapter.info || {};
     return {
@@ -119,4 +119,3 @@ export async function chatLocal({
 export async function chatLocalPlain(args) {
   return chatLocal({ ...args, json: false, temperature: args?.temperature ?? 0.4, maxTokens: args?.maxTokens ?? 768 });
 }
-

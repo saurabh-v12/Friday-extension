@@ -41,7 +41,7 @@ export async function detectWebGPU() {
     return { available: false, reason: "navigator.gpu is undefined" };
   }
   try {
-    const adapter = await navigator.gpu.requestAdapter();
+    const adapter = await navigator.gpu.requestAdapter({ powerPreference: "high-performance" });
     if (!adapter) return { available: false, reason: "requestAdapter returned null" };
     const info = adapter.info || {};
     return {
