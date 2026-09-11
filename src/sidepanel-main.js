@@ -345,6 +345,11 @@ function pickSubmitFlow(source, provider, mode) {
 async function onSubmitComposer(e) {
   e && e.preventDefault && e.preventDefault();
   if (agentInFlight) return;
+  if (wakeSession) {
+    wakeSession.stop();
+    wakeSession = null;
+    resumeWakeAfterDictation = true;
+  }
   const input = $("composerInput");
   const task = (input.value || "").trim();
   if (!task) return;
@@ -734,6 +739,8 @@ function wireComposer() {
 let dictationSession = null;
 let wakeSession = null;
 let voiceStarting = false;
+let autoWakeStarted = false;
+let resumeWakeAfterDictation = false;
 
 function setVoiceStatus(text, kind = "info") {
   const el = $("voiceStatus");
@@ -809,32 +816,52 @@ async function onMicClick() {
       const finalText = String(text || "").trim();
       if (!finalText || submitted) return;
       submitted = true;
+      resumeWakeAfterDictation = true;
       if (input) input.value = finalText;
       dictationSession = null;
-      setMicState(wakeSession ? "wake" : "idle");
+      setMicState("idle");
       setVoiceStatus("Submitting voice command...", "ok");
       // Auto-submit like the send button — the user's finger is off the mic
       // by the time this fires, so a quiet auto-submit is the whole point.
       onSubmitComposer({ preventDefault() {} });
+      resumeWakeSoon(1000);
     },
     onError: (err) => {
       console.warn("[friday.voice] STT error:", err);
       dictationSession = null;
-      setMicState(wakeSession ? "wake" : "idle");
+      setMicState("idle");
       setVoiceStatus(friendlyVoiceError(err), "error");
+      resumeWakeSoon();
     },
     onEnd: (text) => {
       dictationSession = null;
-      if (!wakeSession) setMicState("idle");
+      setMicState("idle");
       if (!submitted && !String(text || "").trim()) {
         setVoiceStatus("No speech detected. Click the mic and try again.", "error");
       }
+      if (!submitted) resumeWakeSoon();
     },
   });
 }
 
-function onMicLongPress() {
+function submitVoiceTask(task) {
+  const clean = String(task || "").replace(/^\s*[,.:;-]+/, "").trim();
+  if (!clean) return;
+  const input = $("composerInput");
+  if (input) input.value = clean;
+  setVoiceStatus("Submitting voice command...", "ok");
+  onSubmitComposer({ preventDefault() {} });
+}
+
+function resumeWakeSoon(delayMs = 700) {
+  if (!resumeWakeAfterDictation) return;
+  resumeWakeAfterDictation = false;
+  setTimeout(() => startWakeListening({ auto: true }), delayMs);
+}
+
+async function startWakeListening({ auto = false } = {}) {
   if (wakeSession) {
+    if (auto) return;
     wakeSession.stop();
     wakeSession = null;
     setVoiceStatus("Wake word stopped.");
@@ -845,27 +872,42 @@ function onMicLongPress() {
     setVoiceStatus("Voice input is not supported in this browser.", "error");
     return;
   }
+  setVoiceStatus(auto ? 'Allow microphone access for wake word, then say "Friday".' : 'Allow microphone access, then say "Friday".');
+  try {
+    await ensureMicrophonePermission();
+  } catch (err) {
+    console.warn("[friday.voice] wake permission failed:", err);
+    setVoiceStatus(friendlyVoiceError(err), "error");
+    setMicState("idle");
+    return;
+  }
   wakeSession = startWakeWord({
-    phrase: "hey friday",
-    onWake: () => {
+    phrase: "friday",
+    onWake: (taskHint) => {
       setVoiceStatus("Wake word heard. Speak your command...", "ok");
       // Give the user a subtle audio ack; TTS is quicker than a beep here.
-      speak("Yes?");
+      if (!taskHint) speak("Yes?");
     },
     onTask: (task) => {
-      if (!task) return;
-      const input = $("composerInput");
-      if (input) input.value = task;
-      setVoiceStatus("Submitting voice command...", "ok");
-      onSubmitComposer({ preventDefault() {} });
+      submitVoiceTask(task);
     },
     onError: (err) => {
       console.warn("[friday.voice] wake-word error:", err);
       setVoiceStatus(friendlyVoiceError(err), "error");
     },
   });
-  setVoiceStatus("Wake word active.");
+  setVoiceStatus(auto ? 'Wake word active. Say "Friday" to start.' : 'Wake word active. Say "Friday".');
   setMicState("wake");
+}
+
+function onMicLongPress() {
+  startWakeListening({ auto: false });
+}
+
+function autoStartWakeWord() {
+  if (autoWakeStarted && wakeSession) return;
+  autoWakeStarted = true;
+  startWakeListening({ auto: true });
 }
 
 function wireVoice() {
@@ -896,6 +938,7 @@ function wireVoice() {
     onMicClick();
   });
   micBtn.addEventListener("contextmenu", (e) => { e.preventDefault(); onMicLongPress(); });
+  setTimeout(autoStartWakeWord, 500);
 }
 
 

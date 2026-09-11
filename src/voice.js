@@ -10,7 +10,7 @@
 //
 // TTS (`speechSynthesis`) uses the local OS voice engine and IS on-device.
 //
-// Wake-word "Hey Friday": continuous SpeechRecognition scan for the phrase;
+// Wake-word "Friday": continuous SpeechRecognition scan for the phrase;
 // on detect, hand off the current transcript to the task pipeline.
 
 export function isSttSupported() {
@@ -87,7 +87,11 @@ export function startDictation({ onInterim, onFinal, onEnd, onError, lang = "en-
       try { rec.stop(); } catch (_) {}
     }
   };
-  rec.onerror = (evt) => { if (onError) onError(evt.error || "speech-error"); };
+  rec.onerror = (evt) => {
+    const error = evt.error || "speech-error";
+    if (/not-allowed|service-not-allowed|audio-capture/i.test(error)) alive = false;
+    if (onError) onError(error);
+  };
   rec.onend = () => { if (onEnd) onEnd(finalText.trim()); };
   try { rec.start(); } catch (err) { if (onError) onError(err.message || String(err)); }
   return {
@@ -98,12 +102,12 @@ export function startDictation({ onInterim, onFinal, onEnd, onError, lang = "en-
 
 // ─── Wake-word listener (Task 5.2) ───────────────────────────────────
 //
-// Continuous SpeechRecognition scanning for the "hey friday" phrase. When
+// Continuous SpeechRecognition scanning for the "friday" phrase. When
 // detected, captures the rest of the utterance (or the next chunk) as the
 // task and hands it back through `onTask`. Restarts itself on `onend`
 // (SpeechRecognition auto-stops after some idle time in Chrome).
 export function startWakeWord({
-  phrase = "hey friday",
+  phrase = "friday",
   onListening,
   onWake,
   onTask,
@@ -125,10 +129,16 @@ export function startWakeWord({
 
       if (!armed) {
         if (heard.includes(norm)) {
-          armed = true;
           armedAt = performance.now();
           taskBuffer = heard.split(norm).slice(1).join(norm).trim();
           if (onWake) onWake(taskBuffer);
+          if (isFinal && taskBuffer) {
+            if (onTask) onTask(taskBuffer);
+            armed = false;
+            taskBuffer = "";
+          } else {
+            armed = true;
+          }
         }
       } else if (isFinal) {
         // Append final chunk to the task, then hand off.
