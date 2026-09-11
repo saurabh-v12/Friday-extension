@@ -18,6 +18,39 @@ const MAX_HISTORY_CHARS = 240;
 const MAX_PROMPT_TOKENS = 1500;
 const ACTIONS = new Set(["say", "done", "stop", "click", "type", "scroll", "goto", "clickOrdinal", "readText", "getSnapshot"]);
 const TOOL_ACTIONS = new Set(["click", "type", "scroll", "goto", "clickOrdinal", "readText", "getSnapshot"]);
+const ORDINAL_WORDS = new Map([
+  ["first", 1],
+  ["1st", 1],
+  ["one", 1],
+  ["second", 2],
+  ["2nd", 2],
+  ["two", 2],
+  ["third", 3],
+  ["3rd", 3],
+  ["three", 3],
+  ["fourth", 4],
+  ["4th", 4],
+  ["four", 4],
+  ["fifth", 5],
+  ["5th", 5],
+  ["five", 5],
+]);
+const KIND_ALIASES = new Map([
+  ["video", "video"],
+  ["videos", "video"],
+  ["button", "button"],
+  ["buttons", "button"],
+  ["link", "link"],
+  ["links", "link"],
+  ["field", "field"],
+  ["fields", "field"],
+  ["input", "field"],
+  ["inputs", "field"],
+  ["heading", "heading"],
+  ["headings", "heading"],
+  ["item", "item"],
+  ["items", "item"],
+]);
 
 function trunc(s, n = MAX_FIELD_CHARS) {
   s = String(s || "").replace(/\s+/g, " ").trim();
@@ -165,6 +198,72 @@ function compactToolResult(result) {
   return result;
 }
 
+function parseOrdinalToken(token) {
+  const t = String(token || "").toLowerCase();
+  if (ORDINAL_WORDS.has(t)) return ORDINAL_WORDS.get(t);
+  const m = t.match(/^(\d+)(?:st|nd|rd|th)?$/);
+  if (!m) return null;
+  const n = Number(m[1]);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+function ordinalLabel(n) {
+  if (n === 1) return "first";
+  if (n === 2) return "second";
+  if (n === 3) return "third";
+  return `${n}th`;
+}
+
+function matchDeterministicTool(task) {
+  const text = String(task || "").toLowerCase().replace(/[^\w\s]/g, " ").replace(/\s+/g, " ").trim();
+  if (!text) return null;
+
+  const ordinalKind = text.match(
+    /\b(?:play|open|watch|start|click|press|select)\s+(?:the\s+)?(\d+(?:st|nd|rd|th)?|first|second|third|fourth|fifth|one|two|three|four|five)\s+(video|videos|button|buttons|link|links|field|fields|input|inputs|heading|headings|item|items)\b/
+  ) || text.match(
+    /\b(?:the\s+)?(\d+(?:st|nd|rd|th)?|first|second|third|fourth|fifth|one|two|three|four|five)\s+(video|videos|button|buttons|link|links|field|fields|input|inputs|heading|headings|item|items)\b/
+  );
+  if (ordinalKind) {
+    const index = parseOrdinalToken(ordinalKind[1]);
+    const kind = KIND_ALIASES.get(ordinalKind[2]);
+    if (index && kind) {
+      return {
+        name: "clickOrdinal",
+        args: { kind, index },
+        successText: `Clicked the ${ordinalLabel(index)} ${kind}.`,
+      };
+    }
+  }
+
+  return null;
+}
+
+async function runDeterministicTool({ tool, emit }) {
+  emit({ phase: "tool-call", step: 0, name: tool.name, args: tool.args, deterministic: true });
+  let result;
+  try {
+    result = await sendToBackground(MESSAGE_TYPES.EXEC_TOOL, { tool: tool.name, args: tool.args });
+  } catch (err) {
+    result = { ok: false, error: err?.message || String(err) };
+  }
+  emit({ phase: "tool-result", step: 0, name: tool.name, args: tool.args, result, deterministic: true });
+  const toolTrace = [{ step: 0, name: tool.name, args: tool.args, result }];
+  const ok = !(result && result.ok === false);
+  const text = ok
+    ? (result?.message || tool.successText || "Done.")
+    : `Local action failed: ${result?.error || "tool failed"}`;
+  emit({ phase: "done", text, toolTrace, local: true, deterministic: true });
+  return {
+    text,
+    toolTrace,
+    assistantMessage: { role: "assistant", content: text },
+  };
+}
+
+function looksLikePageAction(text) {
+  return /\b(click|press|select|play|open|watch|start|type|enter|scroll|go back|go forward|reload|refresh)\b/i.test(String(text || ""));
+}
+
 export async function runLocalAgentTurn({ userMessage, history = [], mode = "chat", modelId, onEvent }) {
   const emit = (evt) => { if (onEvent) onEvent(evt); };
   const snapshot = await fetchSnapshot();
@@ -176,6 +275,11 @@ export async function runLocalAgentTurn({ userMessage, history = [], mode = "cha
     elementCount: snapOk ? (snapshot.elements || []).length : 0,
     url: snapOk ? snapshot.url : null,
   });
+
+  const deterministicTool = matchDeterministicTool(userMessage);
+  if (deterministicTool) {
+    return await runDeterministicTool({ tool: deterministicTool, emit });
+  }
 
   const messages = [
     { role: "system", content: systemPrompt(snapOk ? snapshot : null, mode) },
@@ -202,6 +306,15 @@ export async function runLocalAgentTurn({ userMessage, history = [], mode = "cha
     emit({ phase: "model-reply", step, local: true, textPreview: raw.slice(0, 160) });
 
     if (plan.action === "say" || plan.action === "done" || plan.action === "stop") {
+      if (mode === "agent" && plan.action === "say" && looksLikePageAction(userMessage)) {
+        const text = "Local mode could not choose a safe page action. Switch to Cloud for this task, or try a simpler command like \"click the second video\".";
+        emit({ phase: "done", text, toolTrace, local: true, noToolAction: true });
+        return {
+          text,
+          toolTrace,
+          assistantMessage: { role: "assistant", content: text },
+        };
+      }
       const text = plan.final || (plan.action === "done" ? "Done." : "I cannot proceed from the current page.");
       emit({ phase: "done", text, toolTrace, local: true });
       return {
