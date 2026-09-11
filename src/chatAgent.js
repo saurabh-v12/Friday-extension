@@ -8,7 +8,7 @@
 // it still runs when the user explicitly hits "Run privacy scan".
 
 import { MESSAGE_TYPES, sendToBackground } from "./messaging.js";
-import { chatWithTools, supportsToolCalling } from "./byok.js";
+import { chatWithToolsRetry, supportsToolCalling } from "./byok.js";
 
 export const MAX_TOOL_STEPS = 8;
 
@@ -258,7 +258,14 @@ export async function runChatTurn({ userMessage, history = [], mode = "chat", pr
     const t0 = performance.now();
     let out;
     try {
-      out = await chatWithTools({ provider, apiKey, model, messages, tools: TOOLS });
+      out = await chatWithToolsRetry(
+        { provider, apiKey, model, messages, tools: TOOLS },
+        {
+          onBackoff: (info) => {
+            emit({ phase: "backoff", step, waitMs: info.waitMs, parsedMs: info.parsedMs });
+          },
+        },
+      );
     } catch (err) {
       emit({ phase: "error", message: err.message || String(err) });
       throw err;

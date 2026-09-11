@@ -189,6 +189,45 @@ export async function chatWithTools({ provider, apiKey, model, messages, tools, 
   return impl({ apiKey, model: m, messages, tools, temperature, maxTokens });
 }
 
+// Parse Groq/OpenAI-style "try again in X.Xs" / "try again in Xms" out
+// of a 429 error message. Returns milliseconds, or null when the format
+// isn't recognised. Exported for testing.
+export function parseRetryAfterMs(errMsg) {
+  const m = /try again in\s+([\d.]+)\s*(ms|s|m)?\b/i.exec(String(errMsg || ""));
+  if (!m) return null;
+  const n = parseFloat(m[1]);
+  if (!Number.isFinite(n)) return null;
+  const unit = (m[2] || "s").toLowerCase();
+  if (unit === "ms") return Math.round(n);
+  if (unit === "m")  return Math.round(n * 60_000);
+  return Math.round(n * 1000);
+}
+
+// Retry-once wrapper for `chatWithTools`. On a 429, wait for the delay
+// the provider suggests + 500 ms slack, then retry the SAME call. Only
+// 429s trigger the retry — other errors (401, 400, network) propagate
+// immediately since retrying them won't help.
+//
+// `onBackoff({waitMs, parsedMs, error})` is called before the wait so
+// the UI can show "Rate limited — retrying in Ns…" instead of freezing.
+export async function chatWithToolsRetry(args, { onBackoff } = {}) {
+  try {
+    return await chatWithTools(args);
+  } catch (err) {
+    if (err.status !== 429) throw err;
+    const parsedMs = parseRetryAfterMs(err.message);
+    // Default 5 s if we couldn't parse — better than instant retry
+    // (which will 429 again) or an unbounded wait.
+    const waitMs = (parsedMs != null ? parsedMs : 5000) + 500;
+    console.log(`[backoff] status=429 waitMs=${waitMs} parsedMs=${parsedMs}`);
+    if (onBackoff) {
+      try { onBackoff({ waitMs, parsedMs, error: err }); } catch (_) { /* UI hook mustn't break the retry */ }
+    }
+    await new Promise((r) => setTimeout(r, waitMs));
+    return await chatWithTools(args);
+  }
+}
+
 async function chatOpenAICompatible(endpoint, providerLabel, { apiKey, model, messages, tools, temperature, maxTokens }) {
   const body = {
     model,

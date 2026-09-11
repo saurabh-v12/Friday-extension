@@ -433,6 +433,9 @@ async function runChatToolsFlow({ task, mode, provider }) {
         else setStatus("Answering (no page context on this tab)");
       } else if (evt.phase === "model-call") {
         setStatus(`Calling model (step ${evt.step})…`);
+      } else if (evt.phase === "backoff") {
+        const secs = Math.max(1, Math.round((evt.waitMs || 0) / 1000));
+        setStatus(`Rate limited — retrying in ${secs}s…`);
       } else if (evt.phase === "tool-call") {
         setStatus(`Running tool: ${evt.name}`);
       } else if (evt.phase === "tool-result") {
