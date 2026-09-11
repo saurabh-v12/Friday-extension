@@ -745,6 +745,12 @@ body[data-view="settings"] .settings-view {
   display: flex;
   align-items: flex-start;
   gap: 10px;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding: 8px 0 10px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
 }
 .run-task-wrap { flex: 1; min-width: 0; }
 .run-eyebrow {
@@ -759,6 +765,18 @@ body[data-view="settings"] .settings-view {
   font-size: 14px;
   color: var(--text);
   word-wrap: break-word;
+}
+.new-chat-btn {
+  width: auto;
+  min-width: 30px;
+  padding: 0 8px;
+  gap: 4px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+.new-chat-label {
+  font-size: 12px;
+  font-weight: 600;
 }
 
 .run-trace { display: flex; flex-direction: column; gap: 10px; }

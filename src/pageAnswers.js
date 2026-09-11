@@ -11,9 +11,11 @@ import { PATTERNS } from "./pii.js";
 
 const SCREEN_DESCRIPTION = "screen-description";
 const PAGE_SUMMARY = "page-summary";
+const PAGE_QUESTION = "page-question";
 
-const SCREEN_RE = /^\s*(?:(?:what(?:'s| is)\s+(?:on|in)\s+(?:my\s+|this\s+|the\s+)?(?:screen|page|tab|webpage))|(?:describe\s+(?:my\s+|this\s+|the\s+)?(?:screen|page|tab|webpage))|(?:what\s+am\s+i\s+(?:looking\s+at|seeing))|(?:what\s+(?:can|do)\s+you\s+see(?:\s+(?:on|in)\s+(?:my\s+|this\s+|the\s+)?(?:screen|page|tab|webpage))?)|(?:tell\s+me\s+what(?:'s| is)?\s+(?:on|in)\s+(?:my\s+|this\s+|the\s+)?(?:screen|page|tab|webpage))|(?:read\s+(?:my\s+|this\s+|the\s+)?(?:screen|page|tab|webpage)))\s*[?.!]*\s*$/i;
+const SCREEN_RE = /^\s*(?:(?:can\s+you\s+see\s+(?:my\s+|this\s+|the\s+)?(?:screen|page|tab|webpage))|(?:what(?:'s| is)\s+(?:on|in)\s+(?:my\s+|this\s+|the\s+)?(?:screen|page|tab|webpage))|(?:describe\s+(?:my\s+|this\s+|the\s+)?(?:screen|page|tab|webpage))|(?:what\s+am\s+i\s+(?:looking\s+at|seeing))|(?:what\s+(?:can|do)\s+you\s+see(?:\s+(?:on|in)\s+(?:my\s+|this\s+|the\s+)?(?:screen|page|tab|webpage))?)|(?:tell\s+me\s+what(?:'s| is)?\s+(?:on|in)\s+(?:my\s+|this\s+|the\s+)?(?:screen|page|tab|webpage))|(?:read\s+(?:my\s+|this\s+|the\s+)?(?:screen|page|tab|webpage)))\s*[?.!]*\s*$/i;
 const SUMMARY_RE = /^\s*(?:(?:summari[sz]e|summary|tl;dr|recap)\b.*\b(?:this|the|current|page|webpage|article|screen|tab|site)\b|(?:summari[sz]e|summary|tl;dr|recap)\s*$)/i;
+const PAGE_QUESTION_RE = /^\s*(?:what|what's|what is|which|who|when|where|why|how)\b.*\b(?:screen|page|webpage|tab|site|article)\b.*[?]?\s*$/i;
 
 const PAGE_TEXT_CHARS = 5000;
 const SNAPSHOT_TEXT_CHARS = 2200;
@@ -24,6 +26,7 @@ export function matchPageAnswer(task) {
   if (!t) return null;
   if (SCREEN_RE.test(t)) return { name: SCREEN_DESCRIPTION };
   if (SUMMARY_RE.test(t)) return { name: PAGE_SUMMARY };
+  if (PAGE_QUESTION_RE.test(t)) return { name: PAGE_QUESTION };
   return null;
 }
 
@@ -59,6 +62,29 @@ export async function runPageAnswer({ task, intent, settings, onStatus }) {
     return {
       text: summarizeLocally(snapshot, sanitizeForCloud(rawText || snapshot?.visibleText || "")),
       source: "local-summary",
+    };
+  }
+
+  if (intent?.name === PAGE_QUESTION) {
+    onStatus?.("Reading page context...");
+    const [snapshot, textResult] = await Promise.all([
+      fetchCompactSnapshot({ maxElements: 80, maxText: SNAPSHOT_TEXT_CHARS }),
+      readVisiblePageText(),
+    ]);
+    const rawText = textResult?.text || snapshot?.visibleText || "";
+    const safeText = sanitizeForCloud(rawText).slice(0, SUMMARY_TEXT_CHARS);
+    const local = answerPageQuestionLocally(task, snapshot, safeText);
+    if (local) return { text: local, source: "local-page-question" };
+
+    if (canUseCloud && safeText.trim().length >= 80) {
+      onStatus?.("Answering with page context...");
+      const answer = await answerPageQuestionWithCloud({ task, snapshot, safeText, settings });
+      return { text: answer || summarizeLocally(snapshot, safeText), source: "byok-page-question" };
+    }
+
+    return {
+      text: summarizeLocally(snapshot, safeText || snapshot?.visibleText || ""),
+      source: "local-page-question",
     };
   }
 
@@ -138,6 +164,69 @@ async function summarizeWithCloud({ task, snapshot, safeText, settings }) {
   });
 }
 
+async function answerPageQuestionWithCloud({ task, snapshot, safeText, settings }) {
+  const title = sanitizeForCloud(snapshot?.title || "Current page");
+  const url = safePageUrl(snapshot?.url || "");
+  const messages = [
+    {
+      role: "system",
+      content: [
+        "You are Friday, a concise browser-side assistant.",
+        "Answer only from the provided visible page text and element snapshot.",
+        "Keep the answer to one or two short sentences.",
+        "The text was scrubbed for private data before it reached you.",
+      ].join(" "),
+    },
+    {
+      role: "user",
+      content: [
+        `Question: ${task}`,
+        `Page title: ${title}`,
+        `URL: ${url}`,
+        "",
+        "Visible page text:",
+        safeText || "(no readable text)",
+      ].join("\n"),
+    },
+  ];
+  return chatPlain({
+    provider: settings.byokProvider,
+    apiKey: settings.byokApiKey,
+    model: settings.byokModel,
+    messages,
+    temperature: 0.1,
+    maxTokens: 160,
+  });
+}
+
+function answerPageQuestionLocally(task, snapshot, text) {
+  if (snapshot?._snapshotError) {
+    return "I cannot inspect this browser page. Open a normal http(s) website tab and ask again.";
+  }
+  const q = String(task || "").toLowerCase();
+  if (/\b(main\s+)?heading\b|\btitle\b/.test(q)) {
+    const heading = findMainHeading(snapshot, text);
+    if (heading) return `The main heading appears to be: "${cleanText(heading, 120)}".`;
+  }
+  if (/\bbutton|click\b/.test(q)) {
+    const buttons = (snapshot?.elements || [])
+      .filter((e) => e.role === "button")
+      .map((e) => e.name || e.text || e.placeholder || "")
+      .filter(Boolean)
+      .slice(0, 5);
+    if (buttons.length) return `I can see these buttons: ${buttons.map((b) => `"${cleanText(b, 40)}"`).join(", ")}.`;
+  }
+  if (/\blink\b/.test(q)) {
+    const links = (snapshot?.elements || [])
+      .filter((e) => e.role === "link")
+      .map((e) => e.name || e.text || "")
+      .filter(Boolean)
+      .slice(0, 5);
+    if (links.length) return `I can see these links: ${links.map((l) => `"${cleanText(l, 40)}"`).join(", ")}.`;
+  }
+  return "";
+}
+
 function summarizeLocally(snapshot, text) {
   if (snapshot?._snapshotError) {
     return "I cannot inspect this browser page. Open a normal http(s) website tab and ask again.";
@@ -192,6 +281,15 @@ function summarizeElements(elements) {
   if (fields) counts.push(`${fields} field${fields === 1 ? "" : "s"}`);
   if (!counts.length) return "";
   return `I can interact with ${counts.join(", ")}${names.length ? `, including ${names.join(", ")}.` : "."}`;
+}
+
+function findMainHeading(snapshot, text) {
+  const elements = snapshot?.elements || [];
+  const h1 = elements.find((e) => e.tag === "h1" && (e.text || e.name));
+  if (h1) return h1.text || h1.name;
+  const heading = elements.find((e) => e.role === "heading" && (e.text || e.name));
+  if (heading) return heading.text || heading.name;
+  return splitSentences(text)[0] || snapshot?.title || "";
 }
 
 function firstReadableSentence(text, maxLen) {

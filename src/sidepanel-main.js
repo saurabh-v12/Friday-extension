@@ -583,6 +583,8 @@ function friendlyError(msg) {
 function wireComposer() {
   const composer = $("composer");
   if (composer) composer.addEventListener("submit", onSubmitComposer);
+  const plusBtn = $("plusBtn");
+  if (plusBtn) plusBtn.addEventListener("click", newChat);
   const closeBtn = $("runCloseBtn");
   if (closeBtn) closeBtn.addEventListener("click", closeRunView);
   const newBtn = $("newChatBtn");
