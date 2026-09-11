@@ -3,8 +3,20 @@
   "name": "Friday",
   "version": "0.0.1",
   "description": "A private, on-device AI agent that reads and controls the web without sending your data anywhere.",
+  "icons": {
+    "16": "white cat.png",
+    "32": "white cat.png",
+    "48": "white cat.png",
+    "128": "white cat.png"
+  },
   "action": {
-    "default_title": "Friday"
+    "default_title": "Friday",
+    "default_icon": {
+      "16": "white cat.png",
+      "32": "white cat.png",
+      "48": "white cat.png",
+      "128": "white cat.png"
+    }
   },
   "background": {
     "service_worker": "background.js",
