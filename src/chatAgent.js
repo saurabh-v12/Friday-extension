@@ -94,9 +94,19 @@ export const TOOLS = [
   },
 ];
 
-// Compact snapshot for the system prompt. We trim `visibleText` and the
-// elements list to keep tokens reasonable — the model can call
-// getSnapshot() again if it needs more.
+// Cap on the interactive-elements list sent to the model. Kept tight
+// on purpose — dropped from 80 → 30 after a 4200-token first turn for
+// "scroll down" 429'd on Groq free-tier. If the model needs more it
+// can call getSnapshot() to refresh.
+const MAX_PROMPT_ELEMENTS = 30;
+// Per-field truncation for each element line. 40 chars is enough to
+// disambiguate typical labels/placeholders without paying for prose.
+const MAX_FIELD_CHARS = 40;
+
+// Sanitized DOM summary: url, title, and up to 30 visible interactive
+// elements. No visibleText, no raw HTML, no screenshot — those are the
+// three fat things we WERE sending. Model can still call readText/
+// getSnapshot when it needs more.
 function systemPrompt(snapshot, mode) {
   const modeHint = mode === "agent"
     ? "You are Friday in Agent mode. When the user asks for something that touches the page, prefer to DO it via the tools rather than just describing what to do."
@@ -108,34 +118,58 @@ function systemPrompt(snapshot, mode) {
       "You currently have no page context (couldn't inject into this tab — likely a chrome:// or extension page). Answer conversationally.",
     ].join("\n");
   }
-  const elementLines = (snapshot.elements || []).slice(0, 80).map((e) => {
+  const trunc = (s) => (s && s.length > MAX_FIELD_CHARS ? s.slice(0, MAX_FIELD_CHARS) : s || "");
+  const elementLines = (snapshot.elements || []).slice(0, MAX_PROMPT_ELEMENTS).map((e) => {
     const bits = [`selector=${e.selector}`, `<${e.tag}${e.type ? `:${e.type}` : ""}>`, `role=${e.role}`];
-    if (e.name) bits.push(`name=${JSON.stringify(e.name.slice(0, 60))}`);
-    if (e.text && e.text !== e.name) bits.push(`text=${JSON.stringify(e.text.slice(0, 60))}`);
-    if (e.placeholder) bits.push(`placeholder=${JSON.stringify(e.placeholder.slice(0, 40))}`);
-    if (e.href) bits.push(`href=${JSON.stringify(e.href.slice(0, 80))}`);
+    if (e.name) bits.push(`name=${JSON.stringify(trunc(e.name))}`);
+    if (e.text && e.text !== e.name) bits.push(`text=${JSON.stringify(trunc(e.text))}`);
+    if (e.placeholder) bits.push(`placeholder=${JSON.stringify(trunc(e.placeholder))}`);
+    if (e.href) bits.push(`href=${JSON.stringify(trunc(e.href))}`);
     return "  " + bits.join(" ");
   }).join("\n");
+  const totalEls = (snapshot.elements || []).length;
+  const shown = Math.min(totalEls, MAX_PROMPT_ELEMENTS);
   return [
     modeHint,
     "",
-    "You have access to tools to see and control the current page. The",
-    "snapshot below shows the current URL, title, visible text, and every",
-    "interactive element you can target. Each element has a stable `selector`",
-    "— pass it to click/type/scroll/readText as the `target` argument.",
-    "",
-    "If a tool returns {ok:false, error:…}, don't retry the same call — pick",
-    "a different target, call getSnapshot to refresh, or explain the problem.",
+    "You have tools to see and control the current page. Each element has",
+    "a stable `selector` — pass it to click/type/scroll/readText as `target`.",
+    "If a tool returns {ok:false, error:…}, pick a different target or call",
+    "getSnapshot to refresh — don't retry the same call.",
     "",
     `PAGE: ${snapshot.title} — ${snapshot.url}`,
     "",
-    `ELEMENTS (${(snapshot.elements || []).length} total, first 80 shown):`,
+    `ELEMENTS (${totalEls} total, first ${shown} shown):`,
     elementLines || "  (none)",
-    "",
-    "VISIBLE TEXT (first ~3000 chars):",
-    snapshot.visibleText || "(empty)",
   ].join("\n");
 }
+
+// Rough token count — ~4 chars per token for OpenAI/Groq tokenizers.
+// This is inflight instrumentation, not authoritative — but it's close
+// enough to catch runaway prompts before they hit the wire.
+export function estimatePromptTokens(messages) {
+  let chars = 0;
+  for (const m of messages || []) {
+    if (typeof m.content === "string") chars += m.content.length;
+    else if (Array.isArray(m.content)) {
+      for (const p of m.content) {
+        if (typeof p === "string") chars += p.length;
+        else if (p && typeof p.text === "string") chars += p.text.length;
+      }
+    }
+    if (m.tool_calls) {
+      for (const tc of m.tool_calls) {
+        chars += (tc.function?.name || "").length;
+        chars += (tc.function?.arguments || "").length;
+      }
+    }
+    if (m.tool_call_id) chars += m.tool_call_id.length;
+  }
+  return Math.ceil(chars / 4);
+}
+
+// Hard cap. We aim for ≤ 800; 1200 is the loud-fail line.
+const MAX_PROMPT_TOKENS = 1200;
 
 // Fetch the page snapshot. Falls back to null on any error (chrome://
 // pages, no active tab, etc.) — the caller can still do a text-only chat.
@@ -211,7 +245,16 @@ export async function runChatTurn({ userMessage, history = [], mode = "chat", pr
 
   const toolTrace = [];
   for (let step = 1; step <= MAX_TOOL_STEPS; step++) {
-    emit({ phase: "model-call", step });
+    // Instrument every outbound call. Cheap, catches prompt bloat
+    // before it burns tokens on the wire.
+    const promptTokens = estimatePromptTokens(messages);
+    console.log(`[ctx] promptTokens=${promptTokens}`);
+    if (promptTokens > MAX_PROMPT_TOKENS) {
+      const msg = `Prompt is ${promptTokens} tokens (over ${MAX_PROMPT_TOKENS} cap). Start a new chat or refresh the tab.`;
+      emit({ phase: "error", message: msg });
+      throw new Error(msg);
+    }
+    emit({ phase: "model-call", step, promptTokens });
     const t0 = performance.now();
     let out;
     try {
