@@ -57,6 +57,7 @@ let settings = { ...SETTING_DEFAULTS };
 // specificity race with `.run-view { display: flex; }` and let the run
 // card ghost through as an empty "TASK ✕" bar on the home screen.
 const VIEWS = Object.freeze({ HOME: "home", RUN: "run", RECEIPT: "receipt", SETTINGS: "settings" });
+let settingsReturnView = VIEWS.HOME;
 
 function setView(name) {
   document.body.dataset.view = name;
@@ -167,6 +168,8 @@ function wireDeviceToggle() {
 // ─── Settings gear ────────────────────────────────────────────────────
 
 function openSettings() {
+  const currentView = getView();
+  if (currentView !== VIEWS.SETTINGS) settingsReturnView = currentView;
   setView(VIEWS.SETTINGS);
   renderMode();
   renderDeviceToggle();
@@ -175,12 +178,18 @@ function openSettings() {
   renderByok();
   renderMcp();
 }
+
 function closeSettings() {
-  setView(VIEWS.HOME);
+  setView(settingsReturnView || VIEWS.HOME);
+}
+
+function toggleSettings() {
+  if (getView() === VIEWS.SETTINGS) closeSettings();
+  else openSettings();
 }
 
 function wireSettings() {
-  $("settingsBtn").addEventListener("click", openSettings);
+  $("settingsBtn").addEventListener("click", toggleSettings);
   $("settingsBackBtn")?.addEventListener("click", closeSettings);
   $("settingsCloseBtn")?.addEventListener("click", closeSettings);
   document.addEventListener("keydown", (e) => {
