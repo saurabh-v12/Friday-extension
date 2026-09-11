@@ -188,10 +188,6 @@
             <div class="settings-row-head">
               <div>
                 <div class="settings-row-label">Cloud API key (BYOK)</div>
-                <div class="settings-row-hint">
-                  Used only when the Cloud toggle is on. Stored on this device.
-                  Redacted screenshot + safe DOM are sent — never raw PII.
-                </div>
               </div>
               <select id="byokProviderSel" class="pill-select" aria-label="Cloud provider">
                 <option value="gemini">Gemini</option>
@@ -214,10 +210,6 @@
             <div class="settings-row-head">
               <div>
                 <div class="settings-row-label">MCP servers</div>
-                <div class="settings-row-hint">
-                  JSON array of <code>{name, url, headers?, enabled?}</code>.
-                  Tool args are PII-scrubbed before send. HTTP transport only.
-                </div>
               </div>
             </div>
             <div class="settings-row-body">
@@ -233,10 +225,6 @@
             <div class="settings-row-head">
               <div>
                 <div class="settings-row-label">Local VLM (optional)</div>
-                <div class="settings-row-hint">
-                  Deferred as a fallback — proven correct but slow on typical
-                  hardware (see gate 0.7). Enable only if you have a strong GPU.
-                </div>
               </div>
               <label class="switch" aria-label="Enable local VLM">
                 <input id="vlmToggle" type="checkbox" />
