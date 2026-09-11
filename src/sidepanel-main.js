@@ -907,7 +907,15 @@ async function startWakeListening({ auto = false } = {}) {
     return;
   }
   wakeSession = startWakeWord({
-    phrase: ["friday", "hey friday"],
+    phrase: [
+      "friday",
+      "hey friday",
+      "fri day",
+      "free day",
+      "fry day",
+      "freddy",
+      "hey freddy",
+    ],
     submitDelayMs: 1100,
     wakeTimeoutMs: 8000,
     onListening: () => {

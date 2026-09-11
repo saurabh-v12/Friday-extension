@@ -106,7 +106,7 @@ export function startDictation({ onInterim, onFinal, onEnd, onError, lang = "en-
 // task and hands it back through `onTask`. Restarts itself on `onend`
 // (SpeechRecognition auto-stops after some idle time in Chrome).
 export function startWakeWord({
-  phrase = "friday",
+  phrase = ["friday", "hey friday", "fri day", "free day", "fry day", "freddy", "hey freddy"],
   onListening,
   onWake,
   onTask,
