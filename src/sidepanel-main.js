@@ -838,8 +838,13 @@ async function onMicClick() {
       setVoiceStatus("Submitting voice command...", "ok");
       // Auto-submit like the send button — the user's finger is off the mic
       // by the time this fires, so a quiet auto-submit is the whole point.
-      onSubmitComposer({ preventDefault() {} });
-      resumeWakeSoon(1000);
+      (async () => {
+        try {
+          await onSubmitComposer({ preventDefault() {} });
+        } finally {
+          resumeWakeSoon(1000);
+        }
+      })();
     },
     onError: (err) => {
       console.warn("[friday.voice] STT error:", err);
@@ -912,15 +917,23 @@ async function startWakeListening({ auto = false } = {}) {
     onRestart: () => {
       if (wakeSession) setVoiceStatus('Wake word active. Say "Friday".');
     },
+    onIdle: () => {
+      if (wakeSession) setVoiceStatus('Wake word active. Say "Friday".');
+    },
     onHeard: (_text, info) => {
       if (info?.armed) setVoiceStatus("Listening for your command...", "ok");
     },
-    onWake: (taskHint) => {
+    onWake: () => {
       setVoiceStatus("Wake word heard. Speak your command...", "ok");
-      // Give the user a subtle audio ack; TTS is quicker than a beep here.
-      if (!taskHint) speak("Yes?");
     },
     onTask: async (task) => {
+      if (wakeSession) {
+        const session = wakeSession;
+        wakeSession = null;
+        session.stop();
+      }
+      resumeWakeAfterDictation = true;
+      setMicState("idle");
       await submitVoiceTask(task);
     },
     onError: (err) => {

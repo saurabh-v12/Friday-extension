@@ -111,6 +111,7 @@ export function startWakeWord({
   onWake,
   onTask,
   onHeard,
+  onIdle,
   onRestart,
   onError,
   lang = "en-US",
@@ -120,7 +121,8 @@ export function startWakeWord({
   const phrases = Array.isArray(phrase) ? phrase : [phrase];
   const norms = phrases
     .map((p) => String(p || "").toLowerCase().replace(/[^\w\s]/g, " ").replace(/\s+/g, " ").trim())
-    .filter(Boolean);
+    .filter(Boolean)
+    .sort((a, b) => b.length - a.length);
   const rec = createRecognition({ continuous: true, interimResults: true, lang });
   let alive = true;
   let armed = false;      // heard the wake word, capturing the task now
@@ -145,18 +147,51 @@ export function startWakeWord({
     }
     return null;
   };
-  const disarm = () => {
+  const escapeRegExp = (text) => String(text).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const stripLeadingWakePhrases = (text) => {
+    let rest = clean(text);
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const norm of norms) {
+        if (rest === norm) return "";
+        if (rest.startsWith(`${norm} `)) {
+          rest = rest.slice(norm.length).trim();
+          changed = true;
+        }
+      }
+    }
+    return rest;
+  };
+  const isWakeOnly = (text) => {
+    let rest = clean(text);
+    for (const norm of norms) {
+      rest = rest.replace(new RegExp(`\\b${escapeRegExp(norm)}\\b`, "g"), " ");
+    }
+    return !clean(rest);
+  };
+  const disarm = ({ notify = true } = {}) => {
     armed = false;
     taskBuffer = "";
     interimTaskBuffer = "";
     clearTimers();
+    if (notify && onIdle) onIdle();
   };
   const currentTask = () => clean([taskBuffer, interimTaskBuffer].filter(Boolean).join(" "));
   const submitTask = () => {
-    const task = currentTask();
-    if (!task) return;
+    const rawTask = currentTask();
+    if (!rawTask) return;
+    if (isWakeOnly(rawTask)) {
+      disarm();
+      return;
+    }
+    const task = stripLeadingWakePhrases(rawTask);
+    if (!task) {
+      disarm();
+      return;
+    }
     if (onTask) onTask(task);
-    disarm();
+    disarm({ notify: false });
   };
   const scheduleSubmit = () => {
     if (!currentTask()) return;
