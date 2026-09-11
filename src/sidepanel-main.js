@@ -294,7 +294,7 @@ function summarizeToolCall(name, args, result) {
   if (name === "type") return `${shorten(JSON.stringify(args.text || ""))} → ${shorten(args.target || "")}`;
   if (name === "scroll") return `${args.direction}${args.amount ? ` ${args.amount}px` : ""}`;
   if (name === "goto") return shorten(args.url || "");
-  if (name === "clickNthVideo") return `#${args.index || "?"}${result?.title ? ` "${shorten(result.title)}"` : ""}`;
+  if (name === "clickOrdinal") return `${args.kind || "item"} #${args.index || "?"}${result?.title ? ` "${shorten(result.title)}"` : ""}`;
   if (name === "readText") return result?.text ? `${result.text.length} chars` : (args.target || "(page)");
   if (name === "getSnapshot") return result?.snapshot ? `${result.snapshot.elementCount} elements` : "";
   return "";

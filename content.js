@@ -309,6 +309,35 @@
     return rect.bottom > 0 && rect.right > 0 && rect.top < vh && rect.left < vw;
   }
 
+  function compactBbox(el) {
+    const r = el.getBoundingClientRect();
+    return {
+      x: Math.round(r.left),
+      y: Math.round(r.top),
+      w: Math.round(r.width),
+      h: Math.round(r.height),
+    };
+  }
+
+  function elementKind(el) {
+    const tag = el.tagName.toLowerCase();
+    const role = (computedRole(el) || "").toLowerCase();
+    if (tag === "a" && /\/watch\b/.test(el.getAttribute("href") || "")) return "video";
+    if (role === "button" || tag === "button") return "button";
+    if (["textbox", "searchbox", "combobox"].includes(role) || ["input", "textarea", "select"].includes(tag)) return "field";
+    if (role === "heading" || /^h[1-6]$/.test(tag)) return "heading";
+    if (role === "link" || tag === "a") return "link";
+    return "item";
+  }
+
+  function screenOrderSort(a, b) {
+    const ar = a.rect || a.el?.getBoundingClientRect?.() || a.anchor?.getBoundingClientRect?.();
+    const br = b.rect || b.el?.getBoundingClientRect?.() || b.anchor?.getBoundingClientRect?.();
+    const dy = ar.top - br.top;
+    if (Math.abs(dy) > 24) return dy;
+    return ar.left - br.left;
+  }
+
   function getVideoCandidates() {
     const anchors = Array.from(document.querySelectorAll('a[href*="/watch"]'))
       .filter((a) => {
@@ -332,12 +361,38 @@
       seen.add(href);
       out.push({ anchor: a, title, rect });
     }
-    out.sort((a, b) => {
-      const dy = a.rect.top - b.rect.top;
-      if (Math.abs(dy) > 24) return dy;
-      return a.rect.left - b.rect.left;
-    });
+    out.sort(screenOrderSort);
     return out;
+  }
+
+  function getOrdinalCandidates(kind) {
+    const wanted = String(kind || "item").toLowerCase();
+    if (wanted === "video") {
+      return getVideoCandidates().map((v) => ({
+        el: v.anchor,
+        kind: "video",
+        title: v.title,
+        rect: v.rect,
+      }));
+    }
+    const nodes = Array.from(document.querySelectorAll(COMPACT_SELECTOR))
+      .filter((el) => isCompactVisible(el))
+      .map((el) => ({
+        el,
+        kind: elementKind(el),
+        title: (accessibleName(el) || safeCompactText(el) || "").trim().replace(/\s+/g, " "),
+        rect: el.getBoundingClientRect(),
+      }))
+      .filter((c) => wanted === "item" || c.kind === wanted);
+    const seen = new Set();
+    const deduped = [];
+    for (const c of nodes) {
+      if (seen.has(c.el)) continue;
+      seen.add(c.el);
+      deduped.push(c);
+    }
+    deduped.sort(screenOrderSort);
+    return deduped;
   }
 
   // Very small resolver: finds a snapshot element whose accessible name
@@ -452,14 +507,15 @@
     const nodes = document.querySelectorAll(COMPACT_SELECTOR);
     const elements = [];
     for (const el of nodes) {
-      if (elements.length >= maxElements) break;
       if (!isCompactVisible(el)) continue;
       const tag = el.tagName.toLowerCase();
       const role = computedRole(el) || tag;
       const name = accessibleName(el);
       const text = safeCompactText(el);
       const selector = stableSelector(el, counter);
-      const out = { id: selector, tag, role, name, text, selector };
+      const bbox = compactBbox(el);
+      const kind = elementKind(el);
+      const out = { id: selector, kind, tag, role, name, text, selector, bbox };
       const type = tag === "input" ? (el.getAttribute("type") || "text").toLowerCase() : null;
       if (type) out.type = type;
       if (tag === "a" && el.hasAttribute("href")) out.href = el.getAttribute("href");
@@ -467,6 +523,12 @@
       if (ph) out.placeholder = ph;
       elements.push(out);
     }
+    elements.sort((a, b) => {
+      const dy = a.bbox.y - b.bbox.y;
+      if (Math.abs(dy) > 24) return dy;
+      return a.bbox.x - b.bbox.x;
+    });
+    const visibleElements = elements.slice(0, maxElements).map((e, i) => ({ ...e, screenIndex: i + 1 }));
 
     // document.body.innerText already respects display:none and skips
     // <script>/<style> content — exactly what we want. Cheaper + more
@@ -480,8 +542,9 @@
       url: location.href,
       title: document.title,
       visibleText,
-      elements,
-      elementCount: elements.length,
+      elements: visibleElements,
+      elementCount: visibleElements.length,
+      totalVisibleElements: elements.length,
       capturedAt: Date.now(),
     };
   }
@@ -589,13 +652,19 @@
           const raw = (el.innerText || el.value || el.textContent || "").trim();
           return { ok: true, text: raw.slice(0, maxChars) };
         }
-        case "clickNthVideo": {
+        case "clickOrdinal": {
           const index = Math.max(1, Math.floor(Number(args.index) || 1));
-          const videos = getVideoCandidates();
-          const item = videos[index - 1];
-          if (!item) return { ok: false, error: `found ${videos.length} visible video(s), cannot click #${index}` };
-          item.anchor.click();
-          return { ok: true, index, title: item.title || "", count: videos.length, message: `clicked video #${index}` };
+          const kind = String(args.kind || "item").toLowerCase();
+          const candidates = getOrdinalCandidates(kind);
+          const item = candidates[index - 1];
+          if (!item) return { ok: false, error: `found ${candidates.length} visible ${kind}(s), cannot use #${index}` };
+          if (item.kind === "field") {
+            scrollElementIntoView(item.el);
+            item.el.focus();
+            return { ok: true, kind: item.kind, index, title: item.title || "", count: candidates.length, message: `focused ${kind} #${index}` };
+          }
+          clickElement(item.el);
+          return { ok: true, kind: item.kind, index, title: item.title || "", count: candidates.length, message: `clicked ${kind} #${index}` };
         }
         case "getSnapshot": {
           return { ok: true, snapshot: collectCompactSnapshot() };

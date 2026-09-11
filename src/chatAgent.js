@@ -74,14 +74,15 @@ export const TOOLS = [
   {
     type: "function",
     function: {
-      name: "clickNthVideo",
-      description: "Click/play the Nth visible YouTube video card on the current screen. Use for requests like 'play the 2nd video'.",
+      name: "clickOrdinal",
+      description: "Click or focus the Nth visible item of a kind on the current screen. Use for ordinal tasks like 'play the 2nd video', 'click the first button', or 'open the third link'.",
       parameters: {
         type: "object",
         properties: {
-          index: { type: "integer", description: "1-based visible video number, sorted top-to-bottom then left-to-right." },
+          kind: { type: "string", enum: ["video", "button", "link", "field", "heading", "item"], description: "Visible item kind from the screen snapshot." },
+          index: { type: "integer", description: "1-based visible item number for that kind, sorted top-to-bottom then left-to-right." },
         },
-        required: ["index"],
+        required: ["kind", "index"],
       },
     },
   },
@@ -136,7 +137,9 @@ function systemPrompt(snapshot, mode) {
   }
   const trunc = (s) => (s && s.length > MAX_FIELD_CHARS ? s.slice(0, MAX_FIELD_CHARS) : s || "");
   const elementLines = (snapshot.elements || []).slice(0, MAX_PROMPT_ELEMENTS).map((e) => {
-    const bits = [`selector=${e.selector}`, `<${e.tag}${e.type ? `:${e.type}` : ""}>`, `role=${e.role}`];
+    const pos = e.bbox ? `pos=${e.bbox.x},${e.bbox.y},${e.bbox.w}x${e.bbox.h}` : "";
+    const bits = [`#${e.screenIndex || "?"}`, `kind=${e.kind || "item"}`, `selector=${e.selector}`, `<${e.tag}${e.type ? `:${e.type}` : ""}>`, `role=${e.role}`];
+    if (pos) bits.push(pos);
     if (e.name) bits.push(`name=${JSON.stringify(trunc(e.name))}`);
     if (e.text && e.text !== e.name) bits.push(`text=${JSON.stringify(trunc(e.text))}`);
     if (e.placeholder) bits.push(`placeholder=${JSON.stringify(trunc(e.placeholder))}`);
@@ -148,7 +151,8 @@ function systemPrompt(snapshot, mode) {
   return [
     modeHint,
     "",
-    "You have tools to see and control the current page. Each element has",
+    "You have tools to see and control the current page. Each element line includes kind, selector, role, and screen position.",
+    "For ordinal requests, use clickOrdinal(kind,index): second video = {kind:\"video\", index:2}; first button = {kind:\"button\", index:1}.",
     "a stable `selector` — pass it to click/type/scroll/readText as `target`.",
     "If a tool returns {ok:false, error:…}, pick a different target or call",
     "getSnapshot to refresh — don't retry the same call.",
@@ -231,12 +235,15 @@ function compactToolResult(result) {
         visibleText: typeof snap.visibleText === "string" ? snap.visibleText.slice(0, 500) : "",
         elementCount: snap.elementCount || (snap.elements || []).length || 0,
         elements: (snap.elements || []).slice(0, MAX_PROMPT_ELEMENTS).map((e) => ({
+          screenIndex: e.screenIndex,
+          kind: e.kind,
           selector: e.selector,
           tag: e.tag,
           role: e.role,
           name: e.name,
           text: e.text,
           type: e.type,
+          bbox: e.bbox,
         })),
       },
     };
