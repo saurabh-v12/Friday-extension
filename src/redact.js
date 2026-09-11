@@ -15,6 +15,7 @@
 //     from the image itself), so they're passed through as-is.
 
 export const REDACT_MODES = Object.freeze({
+  DELETE: "delete",
   MASK: "mask",
   BLUR: "blur",
   MOSAIC: "mosaic",
@@ -107,7 +108,7 @@ function drawableSize(d) {
 export async function redactImage({
   imageSource,
   regions,
-  mode = REDACT_MODES.BLUR,
+  mode = REDACT_MODES.DELETE,
   blurPx = 18,
   format = "image/png",
 } = {}) {
@@ -151,6 +152,12 @@ function clamp(v, lo, hi) {
 }
 
 function applyMask(ctx, canvas, mode, blurPx, x, y, w, h) {
+  if (mode === REDACT_MODES.DELETE) {
+    // Clear the actual RGBA pixels so the output image no longer contains
+    // the detected content. This is destructive, unlike blur or mosaic.
+    ctx.clearRect(x, y, w, h);
+    return;
+  }
   if (mode === REDACT_MODES.MASK) {
     ctx.fillStyle = "#000";
     ctx.fillRect(x, y, w, h);

@@ -26,7 +26,7 @@ export const KIND_LABEL = Object.freeze({
   unknown: "Other",
 });
 
-export async function runPrivacyPipeline({ mode = REDACT_MODES.BLUR, onPhase } = {}) {
+export async function runPrivacyPipeline({ mode = REDACT_MODES.DELETE, onPhase } = {}) {
   const t0 = performance.now();
 
   onPhase && onPhase("capturing");

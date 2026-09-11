@@ -247,13 +247,12 @@ async function onRedact() {
     const result = await redactImage({
       imageSource: img,
       regions,
-      mode: REDACT_MODES.BLUR,
-      blurPx: 22,
+      mode: REDACT_MODES.DELETE,
     });
-    log(`[redact] applied=${result.regionsApplied}/${result.regionsGiven} redactMs=${result.redactMs.toFixed(0)} totalMs=${(performance.now() - t0).toFixed(0)}`);
+    log(`[redact] deleted=${result.regionsApplied}/${result.regionsGiven} redactMs=${result.redactMs.toFixed(0)} totalMs=${(performance.now() - t0).toFixed(0)}`);
 
     $("captureImg").src = result.dataUrl;
-    setStatus(`redacted ${result.regionsApplied} region(s)`);
+    setStatus(`deleted pixels in ${result.regionsApplied} region(s)`);
   } catch (err) {
     log(`[redact] FAILED — ${err && err.message ? err.message : err}`);
     setStatus("redact failed");
