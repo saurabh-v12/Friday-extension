@@ -535,6 +535,8 @@ body[data-view="settings"] .settings-view {
 }
 .pill-btn:hover { background: var(--bg-soft); border-color: var(--accent); color: var(--accent); }
 .pill-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+/* Compact modifier — for header placement beside the toggle. */
+.pill-btn--sm { margin-top: 0; padding: 4px 8px; font-size: 11px; gap: 4px; }
 
 /* ─── Privacy receipt card ────────────────────────────────────────── */
 

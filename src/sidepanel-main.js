@@ -741,6 +741,8 @@ async function runScan() {
 function wireReceipt() {
   const scanBtn = $("scanBtn");
   if (scanBtn) scanBtn.addEventListener("click", runScan);
+  const headerScanBtn = $("headerScanBtn");
+  if (headerScanBtn) headerScanBtn.addEventListener("click", runScan);
   $("receiptCloseBtn").addEventListener("click", closeReceiptView);
   $("receiptRescanBtn").addEventListener("click", runScan);
   document.addEventListener("keydown", (e) => {
