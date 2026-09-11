@@ -22,6 +22,7 @@ import { SOURCES } from "./router.js";
 import { isSttSupported, startDictation, speak, isTtsSupported, startWakeWord } from "./voice.js";
 import { runChatTurn } from "./chatAgent.js";
 import { supportsToolCalling, chatPlain } from "./byok.js";
+import { matchShortcut, runShortcut } from "./shortcuts.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -325,6 +326,30 @@ async function onSubmitComposer(e) {
   const task = (input.value || "").trim();
   if (!task) return;
   input.value = "";
+
+  // Intent shortcuts — trivial commands (scroll/reload/back/forward/
+  // new-tab/close-tab) execute directly without an LLM call. Cheapest
+  // win against Groq's free-tier rate limit — the scroll demo alone
+  // was burning 2–3 API calls per invocation via the tool loop.
+  const shortcut = matchShortcut(task);
+  if (shortcut) {
+    agentInFlight = true;
+    setComposerBusy(true);
+    openRunView(task);
+    appendUserBubble(task);
+    try {
+      const message = await runShortcut(shortcut);
+      appendAssistantBubble(message);
+    } catch (err) {
+      const raw = err && err.message ? err.message : String(err);
+      appendAssistantBubble(`Error: ${friendlyError(raw)}`);
+    } finally {
+      agentInFlight = false;
+      setComposerBusy(false);
+      $("runStatus").textContent = "Chat";
+    }
+    return;
+  }
 
   const source = settings.reasoningSource || "local";
   const mode = settings.mode || "chat";
