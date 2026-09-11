@@ -741,6 +741,7 @@ let wakeSession = null;
 let voiceStarting = false;
 let autoWakeStarted = false;
 let resumeWakeAfterDictation = false;
+let lastHeadsetTapAt = 0;
 
 function setVoiceStatus(text, kind = "info") {
   const el = $("voiceStatus");
@@ -883,6 +884,41 @@ function resumeWakeSoon(delayMs = 700) {
   setTimeout(() => startWakeListening({ auto: true }), delayMs);
 }
 
+function handleHeadsetVoiceTap(source = "media-key") {
+  const now = Date.now();
+  if (now - lastHeadsetTapAt < 700) return;
+  lastHeadsetTapAt = now;
+  if (agentInFlight) {
+    setVoiceStatus("Friday is finishing the current task...", "info");
+    return;
+  }
+  setVoiceStatus("Headset button detected. Listening...", "ok");
+  onMicClick();
+}
+
+function wireHeadsetVoiceButton() {
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "MediaPlayPause" && e.code !== "MediaPlayPause") return;
+    e.preventDefault();
+    handleHeadsetVoiceTap("keyboard-media-key");
+  });
+
+  if (!("mediaSession" in navigator)) return;
+  try {
+    navigator.mediaSession.metadata = new MediaMetadata({
+      title: "Friday voice input",
+      artist: "Tap headset button to speak",
+    });
+  } catch (_) {}
+
+  const register = (action) => {
+    try {
+      navigator.mediaSession.setActionHandler(action, () => handleHeadsetVoiceTap(`media-session-${action}`));
+    } catch (_) {}
+  };
+  for (const action of ["play", "pause", "stop", "togglemicrophone"]) register(action);
+}
+
 async function startWakeListening({ auto = false } = {}) {
   if (wakeSession) {
     if (auto) return;
@@ -997,6 +1033,7 @@ function wireVoice() {
     onMicClick();
   });
   micBtn.addEventListener("contextmenu", (e) => { e.preventDefault(); onMicLongPress(); });
+  wireHeadsetVoiceButton();
   setTimeout(autoStartWakeWord, 500);
 }
 
