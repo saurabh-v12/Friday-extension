@@ -361,8 +361,10 @@ function pickSubmitFlow(source, provider, mode, task) {
   if (source === "local") {
     return mode === "agent" || looksLikePageAction(task) ? "local-tools" : "local-chat";
   }
-  if (source === "byok" && mode === "chat") return "chat-plain";
-  if (source === "byok" && mode === "agent" && supportsToolCalling(provider)) return "chat-tools";
+  if (source === "byok" && supportsToolCalling(provider)) {
+    if (mode === "agent" || looksLikePageAction(task)) return "chat-tools";
+    return "chat-plain";
+  }
   return "legacy-agent";
 }
 
@@ -429,7 +431,7 @@ async function onSubmitComposer(e) {
   // If a Chat-mode request was promoted to the tool loop above, run it with
   // agent semantics so the planner prompt tells the model to act rather than
   // explain.
-  const effectiveMode = flow === "local-tools" ? "agent" : mode;
+  const effectiveMode = (flow === "local-tools" || (flow === "chat-tools" && looksLikePageAction(task))) ? "agent" : mode;
 
   const cloudUnusable = source === "byok" && !settings.byokApiKey;
   if (cloudUnusable) {
@@ -463,7 +465,7 @@ async function onSubmitComposer(e) {
     } else if (flow === "chat-plain") {
       await runChatPlainFlow({ task, provider });
     } else if (flow === "chat-tools") {
-      await runChatToolsFlow({ task, mode, provider });
+      await runChatToolsFlow({ task, mode: effectiveMode, provider });
     } else {
       await runLegacyAgentFlow({ task, mode, source });
     }

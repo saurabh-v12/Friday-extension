@@ -214,9 +214,139 @@ function ordinalLabel(n) {
   return `${n}th`;
 }
 
-function matchDeterministicTool(task) {
+function norm(s) {
+  return String(s || "").toLowerCase().replace(/[^\w@.\s+-]/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function elementLabel(e) {
+  return norm([e?.name, e?.text, e?.placeholder, e?.type, e?.role, e?.tag].filter(Boolean).join(" "));
+}
+
+function taskWords(s) {
+  return norm(s).split(/\s+/).filter((w) => w.length > 1 && !["the", "that", "this", "button", "field", "section", "box", "input", "textbox", "click", "press", "tap", "select", "choose", "on", "in", "into", "to"].includes(w));
+}
+
+function isFieldElement(e) {
+  const tag = String(e?.tag || "").toLowerCase();
+  const kind = String(e?.kind || "").toLowerCase();
+  const type = String(e?.type || "").toLowerCase();
+  return kind === "field" || tag === "input" || tag === "textarea" || tag === "select" || type === "text" || type === "email" || type === "search";
+}
+
+function isClickableElement(e) {
+  const tag = String(e?.tag || "").toLowerCase();
+  const kind = String(e?.kind || "").toLowerCase();
+  const role = String(e?.role || "").toLowerCase();
+  const type = String(e?.type || "").toLowerCase();
+  return kind === "button" || kind === "link" || tag === "button" || tag === "a" || role === "button" || role === "link" || ["button", "submit", "reset"].includes(type);
+}
+
+function extractTextEntryIntent(task) {
+  const raw = String(task || "").trim();
+  if (!/\b(?:type|enter|fill|input|write)\b/i.test(raw)) return null;
+  const email = raw.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)?.[0];
+  const quoted = raw.match(/["']([^"']{1,200})["']/)?.[1];
+  const structured = raw.match(/\b(?:type|enter|fill|input|write)\s+(.+?)\s+(?:in|into|to)\s+(?:the\s+)?(.+?)\s*$/i);
+  const text = email || quoted || (structured ? structured[1].trim() : "");
+  if (!text) return null;
+  let hint = structured ? structured[2] : "";
+  if (email) {
+    const tail = raw.slice(raw.toLowerCase().indexOf(email.toLowerCase()) + email.length);
+    hint = tail.match(/\b(?:in|into|to)\s+(?:the\s+)?(.+?)\s*$/i)?.[1] || hint;
+  }
+  hint = hint.replace(/\b(?:field|section|box|input|textbox)\b/gi, " ").trim();
+  return { text, hint };
+}
+
+function scoreField(e, intent, index) {
+  if (!isFieldElement(e)) return -Infinity;
+  const type = String(e?.type || "").toLowerCase();
+  if (type === "password" || type === "hidden") return -Infinity;
+  const label = elementLabel(e);
+  const hint = norm(intent.hint);
+  let score = Math.max(0, 8 - index * 0.1);
+  if (/@/.test(intent.text)) {
+    if (type === "email") score += 12;
+    if (label.includes("email")) score += 14;
+    if (label.includes("username")) score += 6;
+    if (label.includes("phone")) score -= 3;
+  }
+  for (const w of taskWords(hint)) {
+    if (label.includes(w)) score += 5;
+  }
+  return score;
+}
+
+function matchTextEntryTool(task, snapshot) {
+  const intent = extractTextEntryIntent(task);
+  if (!intent || !snapshot || snapshot._snapshotError) return null;
+  const elements = Array.isArray(snapshot.elements) ? snapshot.elements : [];
+  const ranked = elements
+    .map((e, i) => ({ e, score: scoreField(e, intent, i) }))
+    .filter((x) => x.e?.selector && x.score >= 8)
+    .sort((a, b) => b.score - a.score);
+  const best = ranked[0]?.e;
+  if (!best) return null;
+  return {
+    name: "type",
+    args: { target: best.selector, text: intent.text },
+    successText: `Entered ${intent.text} into the field.`,
+  };
+}
+
+function extractClickHint(task) {
+  const raw = String(task || "").trim();
+  if (!/\b(?:click|press|tap|select|choose)\b/i.test(raw)) return "";
+  let hint = raw;
+  const leading = hint.match(/^\s*(?:click|press|tap|select|choose)\s+(?:on\s+)?(?:the\s+)?(.+?)\s*$/i);
+  if (leading) hint = leading[1];
+  else hint = hint.replace(/\b(?:click|press|tap|select|choose)\b.*$/i, "");
+  return hint
+    .replace(/\b(?:on|the|that|this|button|link|option|please)\b/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function scoreClickable(e, hint, index) {
+  if (!isClickableElement(e)) return -Infinity;
+  const label = elementLabel(e);
+  const cleanHint = norm(hint);
+  if (!cleanHint) return -Infinity;
+  let score = Math.max(0, 4 - index * 0.05);
+  if (label === cleanHint) score += 30;
+  if (label.includes(cleanHint)) score += 24;
+  const words = taskWords(cleanHint);
+  if (words.length && words.every((w) => label.includes(w))) score += 16;
+  for (const w of words) if (label.includes(w)) score += 3;
+  return score;
+}
+
+function matchClickByLabelTool(task, snapshot) {
+  const hint = extractClickHint(task);
+  if (!hint || !snapshot || snapshot._snapshotError) return null;
+  const elements = Array.isArray(snapshot.elements) ? snapshot.elements : [];
+  const ranked = elements
+    .map((e, i) => ({ e, score: scoreClickable(e, hint, i) }))
+    .filter((x) => x.e?.selector && x.score >= 12)
+    .sort((a, b) => b.score - a.score);
+  const best = ranked[0]?.e;
+  if (!best) return null;
+  return {
+    name: "click",
+    args: { target: best.selector },
+    successText: `Clicked ${best.name || best.text || hint}.`,
+  };
+}
+
+function matchDeterministicTool(task, snapshot = null) {
   const text = String(task || "").toLowerCase().replace(/[^\w\s]/g, " ").replace(/\s+/g, " ").trim();
   if (!text) return null;
+
+  const textEntry = matchTextEntryTool(task, snapshot);
+  if (textEntry) return textEntry;
+
+  const clickByLabel = matchClickByLabelTool(task, snapshot);
+  if (clickByLabel) return clickByLabel;
 
   const ordinalKind = text.match(
     /\b(?:play|open|watch|start|click|press|select)\s+(?:the\s+)?(\d+(?:st|nd|rd|th)?|first|second|third|fourth|fifth|one|two|three|four|five)\s+(video|videos|button|buttons|link|links|field|fields|input|inputs|heading|headings|item|items)\b/
@@ -276,7 +406,7 @@ export async function runLocalAgentTurn({ userMessage, history = [], mode = "cha
     url: snapOk ? snapshot.url : null,
   });
 
-  const deterministicTool = matchDeterministicTool(userMessage);
+  const deterministicTool = matchDeterministicTool(userMessage, snapOk ? snapshot : null);
   if (deterministicTool) {
     return await runDeterministicTool({ tool: deterministicTool, emit });
   }
