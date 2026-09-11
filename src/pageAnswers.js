@@ -8,8 +8,6 @@
 import { MESSAGE_TYPES, sendToBackground } from "./messaging.js";
 import { chatPlain } from "./byok.js";
 import { PATTERNS } from "./pii.js";
-import { buildSanitizedPayload, runPrivacyPipeline } from "./pipeline.js";
-import { detectWebGPU, loadModel, runInferenceOnUrl, state as vlmState } from "./model.js";
 
 const SCREEN_DESCRIPTION = "screen-description";
 const PAGE_SUMMARY = "page-summary";
@@ -39,15 +37,8 @@ export async function runPageAnswer({ task, intent, settings, onStatus }) {
   if (intent?.name === SCREEN_DESCRIPTION) {
     onStatus?.("Reading the visible screen...");
     const snapshot = await fetchCompactSnapshot({ maxElements: 80, maxText: SNAPSHOT_TEXT_CHARS });
-    const visual = await describeScreenWithLocalVision({ snapshot, settings, onStatus });
-    if (visual) {
-      return {
-        text: visual,
-        source: "local-vlm-screen",
-      };
-    }
     return {
-      text: describeScreen(snapshot, { visualEnabled: !!settings?.vlmEnabled }),
+      text: describeScreen(snapshot),
       source: "local-snapshot",
     };
   }
@@ -119,66 +110,7 @@ async function readVisiblePageText() {
   }
 }
 
-async function describeScreenWithLocalVision({ snapshot, settings, onStatus }) {
-  if (!settings?.vlmEnabled) return "";
-  try {
-    onStatus?.("Capturing screen image locally...");
-    const receipt = await runPrivacyPipeline({
-      onPhase: (phase) => {
-        const label =
-          phase === "capturing" ? "Capturing screen image locally..." :
-          phase === "detecting" ? "Detecting private visual regions locally..." :
-          phase === "redacting" ? "Redacting screenshot locally..." :
-          phase;
-        onStatus?.(label);
-      },
-    });
-    const payload = buildSanitizedPayload(receipt);
-    if (!vlmState.model || !vlmState.processor) {
-      onStatus?.("Loading local vision model...");
-      const gpu = await detectWebGPU();
-      await loadModel({
-        preferWebGPU: gpu.available,
-        onProgress: (evt) => {
-          const pct = evt.pct ? ` (${evt.pct.toFixed(0)}%)` : "";
-          onStatus?.(`Loading local vision model${pct}`);
-        },
-      });
-    }
-    onStatus?.("Looking at the redacted screenshot locally...");
-    const prompt = [
-      "You are Friday, a private local browser assistant.",
-      "Describe this redacted browser screenshot in exactly two short lines.",
-      "Use visual evidence from the image: layout, thumbnails, pictures, visible controls, and page structure.",
-      "Do not invent details. Do not mention private text hidden by redaction except as private areas.",
-      "Line 1: identify the visible page/app and what the user is looking at.",
-      "Line 2: say what useful actions are visible for the agent.",
-    ].join(" ");
-    const result = await runInferenceOnUrl(payload.image.dataUrl, prompt);
-    return normalizeVisualDescription(result.output, snapshot);
-  } catch (err) {
-    console.warn("[friday.pageAnswers] local visual screen description failed:", err);
-    return "";
-  }
-}
-
-function normalizeVisualDescription(text, snapshot) {
-  const cleaned = String(text || "")
-    .replace(/```[\s\S]*?```/g, " ")
-    .replace(/^\s*(?:assistant|answer)\s*:\s*/i, "")
-    .split(/\n+|(?<=\.)\s+/)
-    .map((line) => cleanText(line.replace(/^[-*\d.]+\s*/, ""), 160))
-    .filter(Boolean)
-    .slice(0, 2);
-  if (cleaned.length >= 2) return cleaned.join("\n");
-  if (cleaned.length === 1) {
-    const controls = summarizeElements(snapshot?.elements || []);
-    return `${cleaned[0]}\n${cleanText(controls || "I can use the visible controls on this page.", 190)}`;
-  }
-  return "";
-}
-
-function describeScreen(snapshot, { visualEnabled = false } = {}) {
+function describeScreen(snapshot) {
   if (!snapshot || snapshot._snapshotError) {
     return "I cannot inspect this browser page.\nOpen a normal http(s) website tab and ask again.";
   }
@@ -191,13 +123,10 @@ function describeScreen(snapshot, { visualEnabled = false } = {}) {
   const line1 = host
     ? `You're on "${title}" at ${host}.`
     : `You're on "${title}".`;
-  const fallbackNote = visualEnabled
-    ? ""
-    : " Local visual model is off, so this answer uses readable page text and controls.";
   const line2 = controls
     ? `${firstText || "The visible page has little readable text."} ${controls}`
     : `${firstText || "The visible page has little readable text."}`;
-  return `${line1}\n${cleanText(`${line2}${fallbackNote}`, 190)}`;
+  return `${line1}\n${cleanText(line2, 190)}`;
 }
 
 async function summarizeWithCloud({ task, snapshot, safeText, settings }) {

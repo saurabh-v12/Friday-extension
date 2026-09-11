@@ -307,7 +307,7 @@ export async function runLocalAgentTurn({ userMessage, history = [], mode = "cha
 
     if (plan.action === "say" || plan.action === "done" || plan.action === "stop") {
       if (mode === "agent" && plan.action === "say" && looksLikePageAction(userMessage)) {
-        const text = "Local mode could not choose a safe page action. Switch to Cloud for this task, or try a simpler command like \"click the second video\".";
+        const text = "Local mode could not choose a safe page action. Try a simpler command like \"click the second video\", or switch to Cloud for this task.";
         emit({ phase: "done", text, toolTrace, local: true, noToolAction: true });
         return {
           text,

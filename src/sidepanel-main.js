@@ -152,8 +152,8 @@ function renderDeviceToggle() {
   renderModelLabel();
 }
 
-async function toggleDeviceReasoning() {
-  try {
+function wireDeviceToggle() {
+  $("deviceToggle").addEventListener("click", async () => {
     const currentlyOnDevice = settings.reasoningSource
       ? settings.reasoningSource === "local"
       : settings.onDeviceOnly !== false;
@@ -161,22 +161,6 @@ async function toggleDeviceReasoning() {
     await saveSetting("reasoningSource", nextSource);
     await saveSetting("onDeviceOnly", nextSource === "local");
     renderDeviceToggle();
-  } catch (err) {
-    console.warn("[friday.sidepanel] device toggle failed:", err);
-  }
-}
-
-function wireDeviceToggle() {
-  $("deviceToggle")?.addEventListener("click", async (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    await toggleDeviceReasoning();
-  });
-  document.addEventListener("click", async (e) => {
-    const trigger = e.target && e.target.closest && e.target.closest("#deviceToggle");
-    if (!trigger || e.defaultPrevented) return;
-    e.preventDefault();
-    await toggleDeviceReasoning();
   });
 }
 
@@ -184,34 +168,19 @@ function wireDeviceToggle() {
 
 function openSettings() {
   setView(VIEWS.SETTINGS);
-  const renders = [
-    ["mode", renderMode],
-    ["device", renderDeviceToggle],
-    ["local-llm", renderLocalLlm],
-    ["vlm", renderVlmToggle],
-    ["byok", renderByok],
-    ["mcp", renderMcp],
-  ];
-  for (const [name, fn] of renders) {
-    try {
-      fn();
-    } catch (err) {
-      console.warn(`[friday.sidepanel] settings render failed (${name}):`, err);
-    }
-  }
+  renderMode();
+  renderDeviceToggle();
+  renderLocalLlm();
+  renderVlmToggle();
+  renderByok();
+  renderMcp();
 }
 function closeSettings() {
   setView(VIEWS.HOME);
 }
 
 function wireSettings() {
-  $("settingsBtn")?.addEventListener("click", openSettings);
-  document.addEventListener("click", (e) => {
-    const trigger = e.target && e.target.closest && e.target.closest("#settingsBtn, #modelPill");
-    if (!trigger) return;
-    e.preventDefault();
-    openSettings();
-  });
+  $("settingsBtn").addEventListener("click", openSettings);
   $("settingsBackBtn")?.addEventListener("click", closeSettings);
   $("settingsCloseBtn")?.addEventListener("click", closeSettings);
   document.addEventListener("keydown", (e) => {
@@ -362,12 +331,27 @@ function escapeHtml(s) {
 //     path. Kept as fallback for Gemini or local reasoning; the composer
 //     bounces through it so users still get *something* even when
 //     tool-calling isn't wired up for their provider.
-function pickSubmitFlow(source, provider, mode) {
+// Requests that ask Friday to *do* something to the page, as opposed to
+// answering a question about it. Deliberately verb-anchored: matching a bare
+// noun phrase like "the second video" would turn questions into clicks.
+const PAGE_ACTION_RE = /\b(?:click|press|tap|select|choose|play|watch|type|enter|fill|submit|scroll|log\s+in|sign\s+in)\b/i;
+
+export function looksLikePageAction(task) {
+  return PAGE_ACTION_RE.test(String(task || ""));
+}
+
+function pickSubmitFlow(source, provider, mode, task) {
   // Chat mode → plain provider chat completion (no snapshot, no tools).
   // Agent mode + tool-capable provider → the SEEING/CONTROLLING tool loop.
   // Local or anything else → legacy vision+ReAct agent path.
-  if (source === "local" && mode === "chat") return "local-chat";
-  if (source === "local") return "local-tools";
+  //
+  // EXCEPT: Chat is the DEFAULT mode, and local Chat has no tools and no page
+  // snapshot at all — so "click the sign in button" could only ever produce an
+  // apology from the model. When the request is clearly a page action, send it
+  // to the tool loop even in Chat mode rather than letting it fail silently.
+  if (source === "local") {
+    return mode === "agent" || looksLikePageAction(task) ? "local-tools" : "local-chat";
+  }
   if (source === "byok" && mode === "chat") return "chat-plain";
   if (source === "byok" && mode === "agent" && supportsToolCalling(provider)) return "chat-tools";
   return "legacy-agent";
@@ -432,7 +416,11 @@ async function onSubmitComposer(e) {
     return;
   }
 
-  const flow = pickSubmitFlow(source, provider, mode);
+  const flow = pickSubmitFlow(source, provider, mode, task);
+  // If a Chat-mode request was promoted to the tool loop above, run it with
+  // agent semantics so the planner prompt tells the model to act rather than
+  // explain.
+  const effectiveMode = flow === "local-tools" ? "agent" : mode;
 
   const cloudUnusable = source === "byok" && !settings.byokApiKey;
   if (cloudUnusable) {
@@ -462,7 +450,7 @@ async function onSubmitComposer(e) {
     if (flow === "local-chat") {
       await runLocalPlainFlow({ task });
     } else if (flow === "local-tools") {
-      await runLocalToolsFlow({ task, mode });
+      await runLocalToolsFlow({ task, mode: effectiveMode });
     } else if (flow === "chat-plain") {
       await runChatPlainFlow({ task, provider });
     } else if (flow === "chat-tools") {
@@ -528,10 +516,12 @@ async function runLocalFallbackFlow({ task, mode, reason }) {
     await saveSetting("onDeviceOnly", true);
     renderDeviceToggle();
     renderModelLabel();
-    if (mode === "chat") {
-      await runLocalPlainFlow({ task });
+    // Same promotion as pickSubmitFlow — a page action falling back from the
+    // cloud must still land in a tool-capable flow, not plain chat.
+    if (mode === "agent" || looksLikePageAction(task)) {
+      await runLocalToolsFlow({ task, mode: "agent" });
     } else {
-      await runLocalToolsFlow({ task, mode });
+      await runLocalPlainFlow({ task });
     }
   } finally {
     if (statusRow) statusRow.remove();
