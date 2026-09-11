@@ -95,15 +95,17 @@ export const TOOLS = [
 ];
 
 // Cap on the interactive-elements list sent to the model. Kept tight
-// on purpose — dropped from 80 → 30 after a 4200-token first turn for
+// on purpose — dropped from 80 → 24 after a 4200-token first turn for
 // "scroll down" 429'd on Groq free-tier. If the model needs more it
 // can call getSnapshot() to refresh.
-const MAX_PROMPT_ELEMENTS = 30;
+const MAX_PROMPT_ELEMENTS = 24;
 // Per-field truncation for each element line. 40 chars is enough to
 // disambiguate typical labels/placeholders without paying for prose.
-const MAX_FIELD_CHARS = 40;
+const MAX_FIELD_CHARS = 32;
+const MAX_HISTORY_MESSAGES = 8;
+const MAX_HISTORY_CONTENT_CHARS = 300;
 
-// Sanitized DOM summary: url, title, and up to 30 visible interactive
+// Sanitized DOM summary: url, title, and up to 24 visible interactive
 // elements. No visibleText, no raw HTML, no screenshot — those are the
 // three fat things we WERE sending. Model can still call readText/
 // getSnapshot when it needs more.
@@ -124,7 +126,7 @@ function systemPrompt(snapshot, mode) {
     if (e.name) bits.push(`name=${JSON.stringify(trunc(e.name))}`);
     if (e.text && e.text !== e.name) bits.push(`text=${JSON.stringify(trunc(e.text))}`);
     if (e.placeholder) bits.push(`placeholder=${JSON.stringify(trunc(e.placeholder))}`);
-    if (e.href) bits.push(`href=${JSON.stringify(trunc(e.href))}`);
+    if (e.href) bits.push(`href=${JSON.stringify(trunc(safePageUrl(e.href)))}`);
     return "  " + bits.join(" ");
   }).join("\n");
   const totalEls = (snapshot.elements || []).length;
@@ -137,7 +139,7 @@ function systemPrompt(snapshot, mode) {
     "If a tool returns {ok:false, error:…}, pick a different target or call",
     "getSnapshot to refresh — don't retry the same call.",
     "",
-    `PAGE: ${snapshot.title} — ${snapshot.url}`,
+    `PAGE: ${trunc(snapshot.title)} — ${safePageUrl(snapshot.url)}`,
     "",
     `ELEMENTS (${totalEls} total, first ${shown} shown):`,
     elementLines || "  (none)",
@@ -170,6 +172,35 @@ export function estimatePromptTokens(messages) {
 
 // Hard cap. We aim for ≤ 800; 1200 is the loud-fail line.
 const MAX_PROMPT_TOKENS = 1200;
+
+function safePageUrl(url) {
+  try {
+    const u = new URL(url);
+    const path = u.pathname && u.pathname !== "/" ? u.pathname : "";
+    const out = `${u.hostname}${path}`;
+    return out.length > 120 ? out.slice(0, 119) + "..." : out;
+  } catch {
+    return "";
+  }
+}
+
+function compactHistory(history, systemContent, userMessage) {
+  const keepRoles = new Set(["user", "assistant"]);
+  const recent = (Array.isArray(history) ? history : [])
+    .filter((m) => keepRoles.has(m?.role) && typeof m.content === "string" && m.content.trim())
+    .slice(-MAX_HISTORY_MESSAGES)
+    .map((m) => ({
+      role: m.role,
+      content: m.content.length > MAX_HISTORY_CONTENT_CHARS
+        ? m.content.slice(0, MAX_HISTORY_CONTENT_CHARS).trim() + "..."
+        : m.content,
+    }));
+  const user = { role: "user", content: userMessage };
+  while (recent.length && estimatePromptTokens([{ role: "system", content: systemContent }, ...recent, user]) > MAX_PROMPT_TOKENS) {
+    recent.shift();
+  }
+  return recent;
+}
 
 // Fetch the page snapshot. Falls back to null on any error (chrome://
 // pages, no active tab, etc.) — the caller can still do a text-only chat.
@@ -235,10 +266,12 @@ export async function runChatTurn({ userMessage, history = [], mode = "chat", pr
   }
 
   // Build the messages array. System message reflects THIS turn's
-  // snapshot; history is passed through untouched.
+  // snapshot; old chat history is compacted so it doesn't trip the cap.
+  const sys = systemPrompt(snapOk ? snapshot : null, mode);
+  const compactedHistory = compactHistory(history, sys, userMessage);
   const messages = [
-    { role: "system", content: systemPrompt(snapOk ? snapshot : null, mode) },
-    ...history,
+    { role: "system", content: sys },
+    ...compactedHistory,
     { role: "user", content: userMessage },
   ];
   vlog("system prompt (first 400 chars):", messages[0].content.slice(0, 400) + "…");

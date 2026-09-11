@@ -12,7 +12,7 @@ import { PATTERNS } from "./pii.js";
 const SCREEN_DESCRIPTION = "screen-description";
 const PAGE_SUMMARY = "page-summary";
 
-const SCREEN_RE = /^\s*(?:(?:what(?:'s| is)\s+(?:on|in)\s+(?:my\s+|this\s+|the\s+)?(?:screen|page|tab|webpage))|(?:describe\s+(?:my\s+|this\s+|the\s+)?(?:screen|page|tab|webpage))|(?:what\s+am\s+i\s+(?:looking\s+at|seeing)))\s*[?.!]*\s*$/i;
+const SCREEN_RE = /^\s*(?:(?:what(?:'s| is)\s+(?:on|in)\s+(?:my\s+|this\s+|the\s+)?(?:screen|page|tab|webpage))|(?:describe\s+(?:my\s+|this\s+|the\s+)?(?:screen|page|tab|webpage))|(?:what\s+am\s+i\s+(?:looking\s+at|seeing))|(?:what\s+(?:can|do)\s+you\s+see(?:\s+(?:on|in)\s+(?:my\s+|this\s+|the\s+)?(?:screen|page|tab|webpage))?)|(?:tell\s+me\s+what(?:'s| is)?\s+(?:on|in)\s+(?:my\s+|this\s+|the\s+)?(?:screen|page|tab|webpage))|(?:read\s+(?:my\s+|this\s+|the\s+)?(?:screen|page|tab|webpage)))\s*[?.!]*\s*$/i;
 const SUMMARY_RE = /^\s*(?:(?:summari[sz]e|summary|tl;dr|recap)\b.*\b(?:this|the|current|page|webpage|article|screen|tab|site)\b|(?:summari[sz]e|summary|tl;dr|recap)\s*$)/i;
 
 const PAGE_TEXT_CHARS = 5000;
