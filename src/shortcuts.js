@@ -29,6 +29,20 @@ async function runInTab(func) {
 
 const SHORTCUTS = [
   {
+    name: "play-nth-video",
+    pattern: /^\s*(?:play|open|watch|click)\s+(?:the\s+)?((?:\d+)(?:st|nd|rd|th)?|first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)\s+video(?:\s+(?:on|in)\s+(?:my\s+|this\s+|the\s+)?(?:screen|page|youtube|tab))?\s*[.!]?\s*$/i,
+    handler: async (match) => {
+      const index = ordinalToIndex(match[1]);
+      if (!index) throw new Error(`Could not understand video number: ${match[1]}`);
+      const result = await sendToBackground(MESSAGE_TYPES.EXEC_TOOL, {
+        tool: "clickNthVideo",
+        args: { index },
+      });
+      if (result && result.ok === false) throw new Error(result.error || "video click failed");
+      return result?.title ? `Playing video ${index}: ${result.title}` : `Playing video ${index}.`;
+    },
+  },
+  {
     name: "scroll",
     pattern: /^\s*scroll\s+(up|down|top|bottom)\b\s*$/i,
     handler: async (match) => {
@@ -84,6 +98,25 @@ const SHORTCUTS = [
     },
   },
 ];
+
+function ordinalToIndex(raw) {
+  const s = String(raw || "").trim().toLowerCase();
+  const words = {
+    first: 1,
+    second: 2,
+    third: 3,
+    fourth: 4,
+    fifth: 5,
+    sixth: 6,
+    seventh: 7,
+    eighth: 8,
+    ninth: 9,
+    tenth: 10,
+  };
+  if (words[s]) return words[s];
+  const n = parseInt(s.replace(/(?:st|nd|rd|th)$/i, ""), 10);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
 
 // Match a raw user message against the shortcut patterns. Returns
 // {name, match, handler} or null. Case- and whitespace-insensitive by

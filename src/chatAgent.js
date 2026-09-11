@@ -74,6 +74,20 @@ export const TOOLS = [
   {
     type: "function",
     function: {
+      name: "clickNthVideo",
+      description: "Click/play the Nth visible YouTube video card on the current screen. Use for requests like 'play the 2nd video'.",
+      parameters: {
+        type: "object",
+        properties: {
+          index: { type: "integer", description: "1-based visible video number, sorted top-to-bottom then left-to-right." },
+        },
+        required: ["index"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
       name: "readText",
       description: "Read text from an element, or the full visible page text if no target is given. Use when the snapshot's element list doesn't include the info you need.",
       parameters: {
@@ -200,6 +214,34 @@ function compactHistory(history, systemContent, userMessage) {
     recent.shift();
   }
   return recent;
+}
+
+function compactToolResult(result) {
+  if (!result || typeof result !== "object") return result;
+  if (typeof result.text === "string" && result.text.length > 2000) {
+    return { ...result, text: result.text.slice(0, 2000) + "\n...(truncated)" };
+  }
+  if (result.snapshot && typeof result.snapshot === "object") {
+    const snap = result.snapshot;
+    return {
+      ...result,
+      snapshot: {
+        url: safePageUrl(snap.url),
+        title: snap.title || "",
+        visibleText: typeof snap.visibleText === "string" ? snap.visibleText.slice(0, 500) : "",
+        elementCount: snap.elementCount || (snap.elements || []).length || 0,
+        elements: (snap.elements || []).slice(0, MAX_PROMPT_ELEMENTS).map((e) => ({
+          selector: e.selector,
+          tag: e.tag,
+          role: e.role,
+          name: e.name,
+          text: e.text,
+          type: e.type,
+        })),
+      },
+    };
+  }
+  return result;
 }
 
 // Fetch the page snapshot. Falls back to null on any error (chrome://
@@ -354,10 +396,7 @@ export async function runChatTurn({ userMessage, history = [], mode = "chat", pr
       vlog(`  ← result: ${JSON.stringify(result).slice(0, 200)}`);
       toolTrace.push({ step, name, args, result });
       // Truncate huge results so we don't blow the context window.
-      let content = result;
-      if (result && typeof result === "object" && typeof result.text === "string" && result.text.length > 4000) {
-        content = { ...result, text: result.text.slice(0, 4000) + "\n…(truncated)" };
-      }
+      const content = compactToolResult(result);
       messages.push({
         role: "tool",
         tool_call_id: call.id,

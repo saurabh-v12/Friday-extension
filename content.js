@@ -302,6 +302,44 @@
     el.click();
   }
 
+  function isInViewport(el) {
+    const rect = el.getBoundingClientRect();
+    if (!isVisible(el, rect)) return false;
+    const vw = window.innerWidth, vh = window.innerHeight;
+    return rect.bottom > 0 && rect.right > 0 && rect.top < vh && rect.left < vw;
+  }
+
+  function getVideoCandidates() {
+    const anchors = Array.from(document.querySelectorAll('a[href*="/watch"]'))
+      .filter((a) => {
+        try {
+          const u = new URL(a.href, location.href);
+          return u.pathname === "/watch" && !!u.searchParams.get("v") && isInViewport(a);
+        } catch {
+          return false;
+        }
+      });
+    const seen = new Set();
+    const out = [];
+    for (const a of anchors) {
+      const href = a.href.split("&list=")[0];
+      if (seen.has(href)) continue;
+      const card = a.closest("ytd-rich-item-renderer,ytd-video-renderer,ytd-grid-video-renderer,ytd-compact-video-renderer") || a;
+      const titleEl = card.querySelector("#video-title, #video-title-link, h3 a, a[title]") || a;
+      const title = (titleEl.getAttribute("title") || titleEl.textContent || a.getAttribute("aria-label") || "").trim().replace(/\s+/g, " ");
+      const rect = (card.getBoundingClientRect && card.getBoundingClientRect()) || a.getBoundingClientRect();
+      if (!rect || rect.width < 80 || rect.height < 40) continue;
+      seen.add(href);
+      out.push({ anchor: a, title, rect });
+    }
+    out.sort((a, b) => {
+      const dy = a.rect.top - b.rect.top;
+      if (Math.abs(dy) > 24) return dy;
+      return a.rect.left - b.rect.left;
+    });
+    return out;
+  }
+
   // Very small resolver: finds a snapshot element whose accessible name
   // (or role+name combo, or href) matches an intent string. Intended for
   // quick text-to-fid mapping; the Phase-4 LLM will do the heavier lifting.
@@ -550,6 +588,14 @@
           if (!el) return { ok: false, error: `element not found: ${args.target}` };
           const raw = (el.innerText || el.value || el.textContent || "").trim();
           return { ok: true, text: raw.slice(0, maxChars) };
+        }
+        case "clickNthVideo": {
+          const index = Math.max(1, Math.floor(Number(args.index) || 1));
+          const videos = getVideoCandidates();
+          const item = videos[index - 1];
+          if (!item) return { ok: false, error: `found ${videos.length} visible video(s), cannot click #${index}` };
+          item.anchor.click();
+          return { ok: true, index, title: item.title || "", count: videos.length, message: `clicked video #${index}` };
         }
         case "getSnapshot": {
           return { ok: true, snapshot: collectCompactSnapshot() };
