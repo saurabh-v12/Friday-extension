@@ -23,6 +23,7 @@ import { isSttSupported, startDictation, speak, isTtsSupported, startWakeWord } 
 import { runChatTurn } from "./chatAgent.js";
 import { supportsToolCalling, chatPlain } from "./byok.js";
 import { matchShortcut, runShortcut } from "./shortcuts.js";
+import { matchPageAnswer, runPageAnswer } from "./pageAnswers.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -356,6 +357,25 @@ async function onSubmitComposer(e) {
   const source = settings.reasoningSource || "local";
   const mode = settings.mode || "chat";
   const provider = settings.byokProvider || "gemini";
+  const pageAnswer = matchPageAnswer(task);
+  if (pageAnswer) {
+    agentInFlight = true;
+    setComposerBusy(true);
+    openRunView(task);
+    appendUserBubble(task);
+    try {
+      await runPageAnswerFlow({ task, intent: pageAnswer });
+    } catch (err) {
+      const raw = err && err.message ? err.message : String(err);
+      appendAssistantBubble(`Error: ${friendlyError(raw)}`);
+    } finally {
+      agentInFlight = false;
+      setComposerBusy(false);
+      $("runStatus").textContent = "Chat";
+    }
+    return;
+  }
+
   const flow = pickSubmitFlow(source, provider, mode);
 
   const cloudUnusable = source === "byok" && !settings.byokApiKey;
@@ -389,6 +409,30 @@ async function onSubmitComposer(e) {
     setComposerBusy(false);
     $("runStatus").textContent = "Chat";
   }
+}
+
+// Page-aware answers for "what's on the screen?" and "summarize this page".
+// Runs before generic chat so Chat mode can still see the active tab.
+async function runPageAnswerFlow({ task, intent }) {
+  const statusRow = appendStatusRow("Reading page...");
+  const setStatus = (text) => { if (statusRow) statusRow.textContent = text; };
+  let answer;
+  try {
+    answer = await runPageAnswer({
+      task,
+      intent,
+      settings,
+      onStatus: setStatus,
+    });
+  } finally {
+    if (statusRow) statusRow.remove();
+  }
+  const text = answer?.text || "(no readable page content)";
+  appendAssistantBubble(text);
+  chatHistory.push({ role: "user", content: task });
+  chatHistory.push({ role: "assistant", content: text });
+  await persistChatHistory();
+  if ((settings.mode || "chat") === "agent") speakIfEnabled(text);
 }
 
 // Plain chat: no snapshot, no tools. The demo happy path — Chat mode +

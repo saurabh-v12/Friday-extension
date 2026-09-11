@@ -539,14 +539,15 @@
           return { ok: true, message: `scrolled ${dir}${dir === "up" || dir === "down" ? ` by ${amount}px` : ""}` };
         }
         case "readText": {
+          const maxChars = Math.max(500, Math.min(10000, Number(args.maxChars) || 5000));
           if (!args.target) {
-            const text = ((document.body && document.body.innerText) || "").slice(0, 5000);
+            const text = ((document.body && document.body.innerText) || "").slice(0, maxChars);
             return { ok: true, text };
           }
           const el = document.querySelector(String(args.target));
           if (!el) return { ok: false, error: `element not found: ${args.target}` };
           const raw = (el.innerText || el.value || el.textContent || "").trim();
-          return { ok: true, text: raw.slice(0, 5000) };
+          return { ok: true, text: raw.slice(0, maxChars) };
         }
         case "getSnapshot": {
           return { ok: true, snapshot: collectCompactSnapshot() };
