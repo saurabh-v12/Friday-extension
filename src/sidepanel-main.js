@@ -334,7 +334,7 @@ function escapeHtml(s) {
 // Requests that ask Friday to *do* something to the page, as opposed to
 // answering a question about it. Deliberately verb-anchored: matching a bare
 // noun phrase like "the second video" would turn questions into clicks.
-const PAGE_ACTION_RE = /\b(?:click|press|tap|select|choose|play|watch|type|enter|fill|submit|scroll|log\s+in|sign\s+in)\b/i;
+const PAGE_ACTION_RE = /\b(?:click|press|tap|select|choose|play|watch|type|enter|fill|submit|scroll|search|find|look\s+up|open|launch|visit|go\s+to|goto|navigate\s+to|log\s+in|sign\s+in)\b/i;
 
 export function looksLikePageAction(task) {
   return PAGE_ACTION_RE.test(String(task || ""));

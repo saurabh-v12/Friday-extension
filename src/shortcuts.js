@@ -95,6 +95,48 @@ const SHORTCUTS = [
   // JSON, which it often doesn't. Resolving the URL here keeps navigation
   // deterministic and mode-independent, at zero LLM cost.
   {
+    name: "open-site-search",
+    pattern: /^\s*(?:open|launch|visit|go\s+to|goto|navigate\s+to)\s+(?:the\s+)?(.+?)\s+(?:and\s+)?search\s+(?:for\s+)?(.+?)\s*[.!?]*\s*$/i,
+    resolve: (match) => {
+      const provider = resolveSearchProvider(match[1]);
+      const query = cleanQuery(match[2]);
+      if (!provider || !query) return null;
+      return { provider, query, url: searchUrl(provider, query) };
+    },
+    handler: async (_match, { provider, query, url }) => {
+      await navigateActiveTab(url);
+      return `Searched ${provider.label} for ${query}.`;
+    },
+  },
+  {
+    name: "search-site",
+    pattern: /^\s*(?:search|look\s+up|find)\s+(?:for\s+)?(.+?)\s+(?:on|in|inside)\s+(.+?)\s*[.!?]*\s*$/i,
+    resolve: (match) => {
+      const query = cleanQuery(match[1]);
+      const provider = resolveSearchProvider(match[2]);
+      if (!provider || !query) return null;
+      return { provider, query, url: searchUrl(provider, query) };
+    },
+    handler: async (_match, { provider, query, url }) => {
+      await navigateActiveTab(url);
+      return `Searched ${provider.label} for ${query}.`;
+    },
+  },
+  {
+    name: "search",
+    pattern: /^\s*(?:search|look\s+up|find)\s+(?:for\s+)?(.+?)\s*[.!?]*\s*$/i,
+    resolve: (match) => {
+      const query = cleanQuery(match[1]);
+      return query ? { query } : null;
+    },
+    handler: async (_match, { query }) => {
+      const provider = await inferSearchProviderFromActiveTab();
+      const url = searchUrl(provider, query);
+      await navigateActiveTab(url);
+      return `Searched ${provider.label} for ${query}.`;
+    },
+  },
+  {
     name: "open-site",
     pattern: /^\s*(?:open|launch|visit|go\s+to|goto|navigate\s+to)\s+(?:the\s+)?(.+?)(?:\s+(?:on|in|using|with)\s+(?:google\s+)?(?:chrome|browser|the\s+browser|a\s+new\s+tab|new\s+tab))?\s*[.!?]*\s*$/i,
     // Only claims the command when the target resolves to a real site.
@@ -167,6 +209,72 @@ function resolveSiteUrl(raw) {
 
 function hostLabel(url) {
   try { return new URL(url).hostname.replace(/^www\./, ""); } catch { return url; }
+}
+
+async function navigateActiveTab(url) {
+  const tab = await activeTab();
+  await chrome.tabs.update(tab.id, { url });
+}
+
+function cleanQuery(raw) {
+  return String(raw || "")
+    .trim()
+    .replace(/^["']|["']$/g, "")
+    .replace(/\s+/g, " ")
+    .replace(/\s+(?:on|in|inside)\s*$/i, "")
+    .trim();
+}
+
+const SEARCH_PROVIDERS = Object.freeze({
+  google: {
+    label: "Google",
+    aliases: ["google", "web", "internet", "browser"],
+    url: (q) => `https://www.google.com/search?q=${encodeURIComponent(q)}`,
+  },
+  wikipedia: {
+    label: "Wikipedia",
+    aliases: ["wikipedia", "wiki"],
+    url: (q) => `https://en.wikipedia.org/w/index.php?search=${encodeURIComponent(q)}`,
+  },
+  youtube: {
+    label: "YouTube",
+    aliases: ["youtube", "yt"],
+    url: (q) => `https://www.youtube.com/results?search_query=${encodeURIComponent(q)}`,
+  },
+});
+
+function resolveSearchProvider(raw) {
+  const target = String(raw || "")
+    .toLowerCase()
+    .replace(/[^\w\s.-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!target) return null;
+  for (const provider of Object.values(SEARCH_PROVIDERS)) {
+    if (provider.aliases.some((a) => target === a || target.includes(a))) return provider;
+  }
+  return null;
+}
+
+function providerFromHost(host) {
+  const h = String(host || "").toLowerCase();
+  if (h.includes("wikipedia.org")) return SEARCH_PROVIDERS.wikipedia;
+  if (h.includes("youtube.com")) return SEARCH_PROVIDERS.youtube;
+  return SEARCH_PROVIDERS.google;
+}
+
+async function inferSearchProviderFromActiveTab() {
+  try {
+    const tab = await activeTab();
+    const host = new URL(tab.url || "").hostname;
+    return providerFromHost(host);
+  } catch {
+    return SEARCH_PROVIDERS.google;
+  }
+}
+
+function searchUrl(provider, query) {
+  return provider.url(query);
 }
 
 // Match a raw user message against the shortcut patterns. Returns
